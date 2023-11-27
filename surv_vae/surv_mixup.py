@@ -300,7 +300,7 @@ class SurvivalMixup(torch.nn.Module):
         sigma = torch.exp(sigma_log / 2) # (x_n, m)
         det_sqrt = torch.prod(sigma, dim=-1) # (x_n)
         cov_mtx_inv = 1 / torch.exp(sigma_log) # (x_n, m)
-        return 1 / (2 * np.power(np.pi, x.shape[-1] / 2) * det_sqrt) *\
+        return 1 / (np.power(2 * np.pi, x.shape[-1] / 2) * det_sqrt) *\
             torch.exp(-1 / 2 * torch.sum(x_cnt * cov_mtx_inv * x_cnt, dim=-1))
             
     def surv_steps_to_proba(self, surv_steps: torch.Tensor) -> torch.Tensor:
@@ -355,8 +355,9 @@ class SurvivalMixup(torch.nn.Module):
         E_T = self.gen_exp_time(surv_steps) # (x_n)
         
         _, surv_steps = self.benk(*self._prepare_bg_data(x.shape[0] * self.samples_num), z_smp.flatten(end_dim=-2)) # (x_n * z_n, t_n)
-        surv_proba = self.surv_steps_to_proba(surv_steps)
-        surv_proba = surv_proba.reshape(x.shape[0], self.samples_num, -1) # (x_n, z_n, t_n)
+        # surv_proba = self.surv_steps_to_proba(surv_steps)
+        # surv_proba = surv_proba.reshape(x.shape[0], self.samples_num, -1) # (x_n, z_n, t_n)
+        surv_steps = surv_steps.reshape(x.shape[0], self.samples_num, -1) # (x_n, z_n, t_n)
         # surv_steps = surv_steps.reshape(x.shape[0], self.samples_num, -1) # (x_n, z_n, t_n)
         
         # E_T = self.calc_exp_time(surv_func)  # (x_n)
@@ -366,7 +367,7 @@ class SurvivalMixup(torch.nn.Module):
         pdf = self.calc_pdf(z_smp.flatten(end_dim=-2), mu.flatten(end_dim=-2), sigma.flatten(end_dim=-2)).reshape(x.shape[0], self.samples_num)  # (x_n, z_n)
         
         prob_time = self.T_bg[:-1] + self.T_diff_prob / 2
-        surv_proba = self.smoother(surv_proba, prob_time, E_T, True)
+        surv_proba = self.smoother(surv_steps, prob_time, E_T, True)
         
         
         # gumbel_weights = F.gumbel_softmax(torch.log(surv_steps), tau=1)
@@ -392,7 +393,7 @@ class SurvivalMixup(torch.nn.Module):
         
         # z_smp_flt = z_smp.flatten(end_dim=-2) # (x_n * z_n * p_n, m)
         _, surv_steps = self.benk(*self._prepare_bg_data(x.shape[0] * self.samples_num * sampler_mlp), z_smp.flatten(end_dim=-2)) # (x_n * z_n, t_n)
-        surv_proba = self.surv_steps_to_proba(surv_steps)
+        surv_proba = surv_steps
         surv_proba = surv_proba.reshape(x.shape[0], self.samples_num * sampler_mlp, -1) # (x_n, z_n, t_n)
         # surv_steps = surv_steps.reshape(x.shape[0], self.samples_num, -1) # (x_n, z_n, t_n)
         
@@ -471,7 +472,8 @@ class SurvivalMixup(torch.nn.Module):
             x_list = []
             t_list = []
             X = TensorDataset(torch.from_numpy(x).to('cpu'))
-            dl = DataLoader(X, 256, False)
+            batch = x.shape[0] if self.batch_load is None else self.batch_load
+            dl = DataLoader(X, batch, False)
             for x_b in dl:
                 X_b = x_b[0].to(DEVICE)
                 x_est, E_T, *_ = self(X_b)
@@ -500,40 +502,30 @@ class SurvivalMixup(torch.nn.Module):
         
     def sample_data(self, samples_num: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         with torch.no_grad():
-            code = torch.normal(0, self.vae.sigma_z, (samples_num, self.vae.latent_dim),
-                                 device=DEVICE, dtype=torch.get_default_dtype())
-            z_smp, mu, sigma = self.vae.latent_space_from_code(code, self.samples_num)  # (x_n, z_n, m)
+            code = torch.normal(0, self.vae.sigma_z, (samples_num, self.vae.latent_dim), 
+                                device=DEVICE, dtype=torch.get_default_dtype())
+            x_est = self.vae.decoder(code)
+            mu = self.vae.encoder(x_est)
             surv_func, surv_steps = self.benk(*self._prepare_bg_data(samples_num), mu) # (batch, t_n)
             E_T = self.gen_exp_time(surv_steps) # (x_n)
-            
-            _, surv_steps = self.benk(*self._prepare_bg_data(samples_num * self.samples_num), z_smp.flatten(end_dim=-2)) # (x_n * z_n, t_n)
-            surv_proba = self.surv_steps_to_proba(surv_steps)
-            surv_proba = surv_proba.reshape(samples_num, self.samples_num, -1) # (x_n, z_n, t_n)
-            # surv_steps = surv_steps.reshape(x.shape[0], self.samples_num, -1) # (x_n, z_n, t_n)
-            
-            # E_T = self.calc_exp_time(surv_func)  # (x_n)
-            
-            mu = mu[:, None, :].expand(-1, z_smp.shape[1], -1)
-            sigma = sigma[:, None, :].expand(-1, z_smp.shape[1], -1)
-            pdf = self.calc_pdf(z_smp.flatten(end_dim=-2), mu.flatten(end_dim=-2), sigma.flatten(end_dim=-2)).reshape(samples_num, self.samples_num)  # (x_n, z_n)
-            
-            prob_time = self.T_bg[:-1] + self.T_diff_prob / 2
-            surv_proba = self.smoother(surv_proba, prob_time, E_T, True)
-            
-            
-            # gumbel_weights = F.gumbel_softmax(torch.log(surv_steps), tau=1)
-        
-            
-            pi = self.pi_head(surv_proba, pdf, E_T)
-            
-            # pi = self.pi_head(step, pdf)  # (batch, z_n, 1)
-            z_est = torch.sum(pi[..., None] * z_smp, dim=1)  # (x_n, m)
-
-            x_est = self.vae.decoder(z_est)
             X = x_est.cpu().numpy()
             T = E_T.cpu().numpy()
+            
+            # x_proto = self.vae.decoder(code)
+            # x_list = []
+            # t_list = []
+            # X = TensorDataset(x_proto)
+            # batch = samples_num if self.batch_load is None else self.batch_load
+            # dl = DataLoader(X, batch, False)
+            # for x_b in dl:
+            #     x_est, E_T, *_ = self(x_b[0])
+            #     x_list.append(x_est.cpu().numpy())
+            #     t_list.append(E_T.cpu().numpy())
+            # X = np.concatenate(x_list, axis=0)
+            # T = np.concatenate(t_list, axis=0)
+            
         if self.cens_model:
-            D_proba = self.cens_model.predict_proba(X)[:, 1]
+            D_proba = self.cens_model.predict_proba(np.concatenate((X, T[:, None]), axis=-1))[:, 1]
         else:
             D_proba = self.uncens_part
         D = np.random.binomial(1, D_proba, samples_num)

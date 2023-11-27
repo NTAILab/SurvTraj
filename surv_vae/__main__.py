@@ -24,11 +24,12 @@ def draw_latent_space(model, *args):
     X = np.concatenate(args, axis=0)
     with no_grad():
         _, _, Z, mu, *_ = model(tensor(X, dtype=tens_type(), device=DEVICE))
-        Z = mu
         Z = Z.cpu().numpy()
     print('Latent space std:', np.std(Z, 0))
     _, p_val = normaltest(Z)
     print('p values of the normal test:', p_val)
+    worst_p_args = np.argsort(p_val)[:2]
+    worst_z = Z[:, worst_p_args]
     if dim > 2:
         Z = TSNE().fit_transform(Z)
     if dim == 2:
@@ -41,6 +42,9 @@ def draw_latent_space(model, *args):
         cur_cls = Z[start_idx:end_idx]
         ax.scatter(*cur_cls.T)
         start_idx += args[i].shape[0]
+    fig, ax = plt.subplots(1, 1)
+    ax.scatter(*worst_z.T)
+    fig.suptitle(f'Worst p vals projection (axis {worst_p_args})')
     return fig, ax
 
 def x_experiment_linear():
@@ -661,35 +665,54 @@ def real_ds_test(x, y, name='real ds'):
             fig, ax = plt.subplots(1, 1)
             # fig.suptitle(name)
         else:
+            fig = None
             ax = axis
         x, y, conf_int = kaplan_meier_estimator(D.astype(bool), T, conf_type="log-log")
         ax.step(x, y, where="post", label=name)
         ax.fill_between(x, conf_int[0], conf_int[1], alpha=0.25, step="post")
         ax.set_ylim(0, 1)
         ax.grid(True)
-        return ax
+        return fig, ax
     
-    km_axis = draw_kaplan(y['time'], y['censor'], 'Input data ' + name)
+    km_fig, km_axis = draw_kaplan(y['time'], y['censor'], 'Original data')
     
     model = SurvivalMixup(cens_cls_model=RandomForestClassifier(), **mixup_kw)
     date_str = strftime('%m_%d %H_%M_%S', gmtime())
     model.fit(x, y, f'TensorBoard/{name}/{date_str}')
     model.samples_num = 64
+    model.batch_load = 256
     x_rec, y_rec, d_rec = model.predict(x)
+    x_samples, t_samples, d_samples = model.sample_data(x.shape[0])
 
-    draw_tsne((x, x_rec), ('Input data ' + name, 'Reconstruction ' + name))
-    draw_kaplan(y_rec, d_rec, 'Reconstruction ' + name, km_axis)
+    _, tsne_ax = draw_tsne((x, x_rec), ('Original data', 'Reconstruction'))
+    tsne_ax.legend()
+    _, tsne_ax = draw_tsne((x, x_samples), ('Original data', 'Sampling'))
+    tsne_ax.legend()
+    draw_kaplan(y_rec, d_rec, 'Reconstruction', km_axis)
+    draw_kaplan(t_samples, d_samples, 'Sampling', km_axis)
+    km_fig.suptitle(name)
     km_axis.legend()
     
     c_ind_model, *_ = concordance_index_censored(y['censor'], y['time'], -y_rec)
     
     rf = RandomSurvivalForest().fit(x, y)
     c_ind_rf = rf.score(x, y)
-    c_ind_simul = rf.score(x_rec, get_str_array(y_rec, d_rec))
+    y_sim = get_str_array(y_rec, d_rec)
+    c_ind_simul = rf.score(x_rec, y_sim)
+    rf = RandomSurvivalForest().fit(x_rec, y_sim)
+    c_ind_full_sim = rf.score(x_rec, y_sim)
+    x_enl = np.concatenate((x, x_rec), axis=0)
+    t_enl = np.concatenate((y_rec, y['time']))
+    d_enl = np.concatenate((d_rec, y['censor']))
+    y_enl = get_str_array(t_enl, d_enl)
+    rf = RandomSurvivalForest().fit(x_enl, y_enl)
+    c_ind_enl = rf.score(x, y)
     
     print('Model c_ind:', c_ind_model)
-    print('RF c_ind:', c_ind_rf)
-    print('RF c_ind with simulated data:', c_ind_simul)
+    print('RF c_ind (orig ds):', c_ind_rf)
+    print('RF c_ind (orig ds -> simulated data):', c_ind_simul)
+    print('RF c_ind (simulated data -> simulated data)', c_ind_full_sim)
+    print('RF c_ind (orig ds + simulated data -> orig ds)', c_ind_enl)
     plt.show()
 
 
@@ -728,23 +751,23 @@ def aids_exp():
     
 if __name__=='__main__':
     vae_kw = {
-        'latent_dim': 16,
-        'regular_coef': 20,
+        'latent_dim': 8,
+        'regular_coef': 60,
         'sigma_z': 1
     }
     mixup_kw = {
         'vae_kw': vae_kw,
-        'samples_num': 48,
+        'samples_num': 64,
         'batch_num': 16,
-        'epochs': 40,
+        'epochs': 150,
         'lr_rate': 2e-3,
-        'benk_vae_loss_rat': 0.6,
-        'c_ind_temp': 1.0,
-        'gumbel_tau': 1.0,
-        'train_bg_part': 0.4,
-        'batch_load': 64,
+        'benk_vae_loss_rat': 0.2,
+        'c_ind_temp': 1,
+        'gumbel_tau': 0.50,
+        'train_bg_part': 0.6,
+        'batch_load': None,
     }
-    # x_experiment_linear()
+    x_experiment_linear()
     # x_experiment_spiral()
     # x_experiment_moons()
     # x_experiment_curves()
@@ -753,5 +776,5 @@ if __name__=='__main__':
     
     # veterans_exp()
     # whas500_exp()
-    gbsg2_exp()
+    # gbsg2_exp()
     # aids_exp()

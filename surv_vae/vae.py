@@ -12,10 +12,10 @@ class VAE(torch.nn.Module):
             torch.nn.ReLU6(),
             torch.nn.Linear(2 * dim_in, dim_latent),
             torch.nn.Tanh(),
-            torch.nn.Linear(dim_latent, dim_latent),
-            torch.nn.Tanh(),
-            torch.nn.Linear(dim_latent, dim_latent),
-            torch.nn.Tanh(),
+            # torch.nn.Linear(dim_latent, dim_latent),
+            # torch.nn.Tanh(),
+            # torch.nn.Linear(dim_latent, dim_latent),
+            # torch.nn.Tanh(),
             torch.nn.Linear(dim_latent, dim_latent)
         ).to(DEVICE)
 
