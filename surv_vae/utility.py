@@ -11,9 +11,9 @@ class sksurv_loader():
     
     def __getattr__(self, key):
         X, y = getattr(ds, key)()
-        X = encode_categorical(X)
         if self.z_norm:
             X = standardize(X)
+        X = encode_categorical(X)
         return X.to_numpy(), y.astype(TYPE)
 
 # separate arrays to the structured one

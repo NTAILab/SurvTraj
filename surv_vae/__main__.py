@@ -94,7 +94,7 @@ def x_experiment_linear():
     
     model = SurvivalMixup(**mixup_kw)
     date_str = strftime('%m_%d %H_%M_%S', gmtime())
-    model.fit(x_train, y, 'TensorBoard/linear/' + date_str)
+    model.fit(x_train, y, log_dir='TensorBoard/linear/' + date_str)
     exp_points_2d = np.concatenate(
         (cls_centers, (cls_centers[None, -1] + cls_centers[None, -2]) / 2, (cls_centers[None, -3] + cls_centers[None, -4]) / 2),
         axis=0
@@ -225,7 +225,7 @@ def x_experiment_spiral():
     
     model = SurvivalMixup(**mixup_kw)
     date_str = strftime('%m_%d %H_%M_%S', gmtime())
-    model.fit(x_train, y, 'TensorBoard/spiral/' + date_str)
+    model.fit(x_train, y, log_dir='TensorBoard/spiral/' + date_str)
     x_ec, T, D = model.predict(cls_centers)
     print(T)
     ax.scatter(*cls_centers.T, c='k', marker='*')
@@ -328,7 +328,7 @@ def x_experiment_moons():
     
     model = SurvivalMixup(**mixup_kw)
     date_str = strftime('%m_%d %H_%M_%S', gmtime())
-    model.fit(x_train, y, 'TensorBoard/moons/' + date_str)
+    model.fit(x_train, y, log_dir='TensorBoard/moons/' + date_str)
     t = np.linspace(np.min(t_train), np.max(t_train), 100)
     exp_points = cls_centers
     
@@ -454,7 +454,7 @@ def x_experiment_curves():
     
     model = SurvivalMixup(**mixup_kw)
     date_str = strftime('%m_%d %H_%M_%S', gmtime())
-    model.fit(x_train, y, 'TensorBoard/curves/' + date_str)
+    model.fit(x_train, y, log_dir='TensorBoard/curves/' + date_str)
     t = np.linspace(np.min(t_train), np.max(t_train), 100)
     exp_points = cls_centers
     
@@ -540,7 +540,7 @@ def x_experiment_overlap():
     
     model = SurvivalMixup(**mixup_kw)
     date_str = strftime('%m_%d %H_%M_%S', gmtime())
-    model.fit(x_train, y, 'TensorBoard/overlap/' + date_str)
+    model.fit(x_train, y, log_dir='TensorBoard/overlap/' + date_str)
     x_ec, T, D = model.predict(cls_centers)
     print(T)
     ax.scatter(*cls_centers.T, c='k', marker='*')
@@ -630,7 +630,7 @@ def censored_exp():
     y_train = get_str_array(Y, D)
     model = SurvivalMixup(cens_cls_model=RandomForestClassifier(n_estimators=40), **mixup_kw)
     date_str = strftime('%m_%d %H_%M_%S', gmtime())
-    model.fit(x_train, y_train, 'TensorBoard/censor/' + date_str)
+    model.fit(x_train, y_train, log_dir='TensorBoard/censor/' + date_str)
     
     x_recon, y_recon, d_recon = model.predict(x_train)
     fig = plt.figure()
@@ -678,7 +678,7 @@ def real_ds_test(x, y, name='real ds'):
     
     model = SurvivalMixup(cens_cls_model=RandomForestClassifier(), **mixup_kw)
     date_str = strftime('%m_%d %H_%M_%S', gmtime())
-    model.fit(x, y, f'TensorBoard/{name}/{date_str}')
+    model.fit(x, y, log_dir=f'TensorBoard/{name}/{date_str}')
     model.samples_num = 64
     model.batch_load = 256
     x_rec, y_rec, d_rec = model.predict(x)

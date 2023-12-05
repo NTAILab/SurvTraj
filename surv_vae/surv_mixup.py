@@ -2,6 +2,7 @@ import torch
 from .vae import VAE
 from .beran import BENK
 from .surv_weights import PiHead
+from sksurv.metrics import concordance_index_censored
 from . import DEVICE
 from typing import Dict, Tuple, Optional
 import time
@@ -11,6 +12,7 @@ from torch.utils.data import TensorDataset, DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm.auto import tqdm
 from .smoother import ConvStepSmoother, SoftminStepSmoother
+import copy
 
 # makes background for the Beran estimator
 # the one is partially censored
@@ -84,7 +86,8 @@ class SurvivalMixup(torch.nn.Module):
                  gumbel_tau: float = 1.0,
                  train_bg_part: float = 0.6,
                  cens_cls_model = None,
-                 batch_load: Optional[int] = None) -> None:
+                 batch_load: Optional[int] = None,
+                 patience: int = 10) -> None:
         super().__init__()
         self.vae = VAE(**vae_kw)
         self.samples_num = samples_num
@@ -101,6 +104,7 @@ class SurvivalMixup(torch.nn.Module):
         self.c_ind_temp = c_ind_temp
         self.benk_ratio = benk_vae_loss_rat
         self.batch_load = batch_load
+        self.patience = patience
         
         # self.smoother = ConvStepSmoother()
         self.smoother = SoftminStepSmoother()
@@ -138,9 +142,24 @@ class SurvivalMixup(torch.nn.Module):
         surv_func, _ = self.benk(*self._prepare_bg_data(x.shape[0]), x_latent)
         E_T = self.calc_exp_time(surv_func)
         return E_T
+    
+    def calc_val_loss(self, val_set: Tuple):
+        with torch.no_grad():
+            E_T = self.forward_exp_time(val_set[0])
+            E_T = E_T.cpu().numpy()
+        c_ind, *_ = concordance_index_censored(np.ones_like(E_T, np.bool_), val_set[1], -E_T)
+        return c_ind
+    
+    def prepare_val_set(self, val_set: Tuple[np.ndarray, np.recarray]) -> Tuple[torch.Tensor, torch.Tensor]:
+        d_mask = val_set[1]['censor'] == 1
+        X = torch.tensor(val_set[0][d_mask], dtype=torch.get_default_dtype(), device=DEVICE)
+        T = val_set[1]['time'][d_mask].copy()
+        return X, T
         
-    def fit(self, x: np.ndarray, y: np.recarray,
-            log_dir:Optional[str]=None, f_calc_val:bool = False) -> 'SurvivalMixup':
+        
+    def fit(self, x: np.ndarray, y: np.recarray, 
+            val_set: Optional[Tuple[np.ndarray, np.recarray]]=None,
+            log_dir:Optional[str]=None) -> 'SurvivalMixup':
         assert x.shape[0] == y.shape[0]
         self._lazy_init(x, y)
         optimizer = self._get_optimizer()
@@ -149,6 +168,11 @@ class SurvivalMixup(torch.nn.Module):
         
         if log_dir is not None:
             summary_writer = SummaryWriter(log_dir)
+        
+        cur_patience = 0
+        best_val_loss = 0
+        if val_set is not None:
+            val_prepaired_data = self.prepare_val_set(val_set)
 
         # delta_mask = y['censor'] == 1
         # x_train, t_train = x[delta_mask], y['time'][delta_mask]
@@ -162,6 +186,7 @@ class SurvivalMixup(torch.nn.Module):
             i = 0
             train_T = y['time'].copy()
             train_D = y['censor'].copy()
+            self.uncens_part = np.sum(train_D) / train_D.shape[0]
             data = dataset_generator(x, train_T, train_D, back_size, self.batch_num)
             X_back = torch.from_numpy(data[0]).type(
                 torch.get_default_dtype()).to(DEVICE)
@@ -241,17 +266,24 @@ class SurvivalMixup(torch.nn.Module):
                     'Regul': cum_reg_loss / i,
                     'C ind': cum_benk_loss / i
                 }
-                if f_calc_val:
-                    raise NotImplementedError()
-                    # difference between the x time estim and
-                    # estim times of the generated points
-                    with torch.no_grad():
-                        E_T_val = self.forward_exp_time(x_est)
-                        cum_val_t_loss += torch.mean((E_T_val - t_t) ** 2).item()
-                        epoch_metrics['Val T mse'] = cum_val_t_loss / i
                 prog_bar.set_postfix(epoch_metrics)
             if log_dir is not None:
                 summary_writer.add_scalars('train_metrics', epoch_metrics, e)
+            if val_set is not None:
+                cur_patience += 1
+                val_loss = self.calc_val_loss(val_prepaired_data)
+                if val_loss >= best_val_loss:
+                    best_val_loss = val_loss
+                    weights = copy.deepcopy(self.state_dict())
+                    cur_patience = 0
+                print(f'Val C-index: {round(val_loss, 5)}, patience: {cur_patience}')
+                if log_dir is not None:
+                    summary_writer.add_scalars('val_metric', val_loss, e)
+                if cur_patience >= self.patience:
+                    print('Early stopping!')
+                    self.load_state_dict(weights)
+                    break
+                    
         self._set_background(
             torch.from_numpy(x).type(
                 torch.get_default_dtype()).to(DEVICE),
@@ -266,8 +298,6 @@ class SurvivalMixup(torch.nn.Module):
         self.eval()
         if self.cens_model is not None:
             self.fit_cens_model(x, train_T, train_D)
-        else:
-            self.uncens_part = np.sum(train_D) / train_D.shape[0]
         return self
 
     def fit_cens_model(self, x: np.ndarray, t: np.ndarray, d: np.ndarray):
@@ -481,7 +511,7 @@ class SurvivalMixup(torch.nn.Module):
                 t_list.append(E_T.cpu().numpy())
             X = np.concatenate(x_list, axis=0)
             T = np.concatenate(t_list, axis=0)
-            if self.cens_model:
+            if self.cens_model is not None:
                 D_proba = self.cens_model.predict_proba(np.concatenate((X, T[:, None]), -1))[:, 1]
             else:
                 D_proba = self.uncens_part
@@ -530,3 +560,12 @@ class SurvivalMixup(torch.nn.Module):
             D_proba = self.uncens_part
         D = np.random.binomial(1, D_proba, samples_num)
         return X, T, D
+
+    def score(self, x: np.ndarray, y: np.recarray) -> float:
+        with torch.no_grad():
+            X = torch.from_numpy(x).to(DEVICE)
+            E_T = self.forward_exp_time(X)
+            E_T = E_T.cpu().numpy()
+        c_ind, *_ = concordance_index_censored(y['censor'], y['time'], -E_T)
+        return c_ind
+        
