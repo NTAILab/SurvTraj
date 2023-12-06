@@ -118,6 +118,7 @@ class SurvivalMixup(torch.nn.Module):
 
     def _lazy_init(self, x: np.ndarray, y: np.recarray):
         self.pi_head = PiHead(None)
+        self.vae.dec_dim = self.vae.latent_dim + 1
         self.vae._lazy_init(x)
 
     def _set_background(self, X: torch.Tensor, T: torch.Tensor, D: torch.Tensor):
@@ -382,12 +383,13 @@ class SurvivalMixup(torch.nn.Module):
         
         # z_smp_flt = z_smp.flatten(end_dim=-2) # (x_n * z_n, m)
         surv_func, surv_steps = self.benk(*self._prepare_bg_data(x.shape[0]), mu) # (batch, t_n)
-        E_T = self.gen_exp_time(surv_steps) # (x_n)
+        T_gen = self.gen_exp_time(surv_steps) # (x_n)
+        E_T = self.calc_exp_time(surv_func)
         
         _, surv_steps = self.benk(*self._prepare_bg_data(x.shape[0] * self.samples_num), z_smp.flatten(end_dim=-2)) # (x_n * z_n, t_n)
-        # surv_proba = self.surv_steps_to_proba(surv_steps)
-        # surv_proba = surv_proba.reshape(x.shape[0], self.samples_num, -1) # (x_n, z_n, t_n)
-        surv_steps = surv_steps.reshape(x.shape[0], self.samples_num, -1) # (x_n, z_n, t_n)
+        surv_proba = self.surv_steps_to_proba(surv_steps)
+        surv_proba = surv_proba.reshape(x.shape[0], self.samples_num, -1) # (x_n, z_n, t_n)
+        # surv_steps = surv_steps.reshape(x.shape[0], self.samples_num, -1) # (x_n, z_n, t_n)
         # surv_steps = surv_steps.reshape(x.shape[0], self.samples_num, -1) # (x_n, z_n, t_n)
         
         # E_T = self.calc_exp_time(surv_func)  # (x_n)
@@ -397,20 +399,20 @@ class SurvivalMixup(torch.nn.Module):
         pdf = self.calc_pdf(z_smp.flatten(end_dim=-2), mu.flatten(end_dim=-2), sigma.flatten(end_dim=-2)).reshape(x.shape[0], self.samples_num)  # (x_n, z_n)
         
         prob_time = self.T_bg[:-1] + self.T_diff_prob / 2
-        surv_proba = self.smoother(surv_steps, prob_time, E_T, True)
+        surv_proba = self.smoother(surv_proba, prob_time, T_gen, True)
         
         
         # gumbel_weights = F.gumbel_softmax(torch.log(surv_steps), tau=1)
     
         
-        pi = self.pi_head(surv_proba, pdf, E_T)
+        pi = self.pi_head(surv_proba, pdf, T_gen)
         
         # pi = self.pi_head(step, pdf)  # (batch, z_n, 1)
         z_est = torch.sum(pi[..., None] * z_smp, dim=1)  # (x_n, m)
 
-        x_est = self.vae.decoder(z_est)
+        x_est = self.vae.decoder(torch.concat((z_est, E_T[:, None]), dim=-1))
 
-        return x_est, E_T, z_smp[:, 0, ...], mu_out, sigma_out
+        return x_est, T_gen, z_smp[:, 0, ...], mu_out, sigma_out
     
     def forward_trajectory(self, x: torch.Tensor, points_num: int, t_min: float, t_max: float, f_single_samples_set=True):
         sampler_mlp = 1 if f_single_samples_set else points_num
@@ -423,7 +425,7 @@ class SurvivalMixup(torch.nn.Module):
         
         # z_smp_flt = z_smp.flatten(end_dim=-2) # (x_n * z_n * p_n, m)
         _, surv_steps = self.benk(*self._prepare_bg_data(x.shape[0] * self.samples_num * sampler_mlp), z_smp.flatten(end_dim=-2)) # (x_n * z_n, t_n)
-        surv_proba = surv_steps
+        surv_proba = self.surv_steps_to_proba(surv_steps)
         surv_proba = surv_proba.reshape(x.shape[0], self.samples_num * sampler_mlp, -1) # (x_n, z_n, t_n)
         # surv_steps = surv_steps.reshape(x.shape[0], self.samples_num, -1) # (x_n, z_n, t_n)
         
@@ -462,40 +464,9 @@ class SurvivalMixup(torch.nn.Module):
             z_smp = z_smp.reshape(x.shape[0], self.samples_num, sampler_mlp, -1)
         z_est = torch.sum(pi[..., None] * z_smp, dim=1)  # (x_n, p_n, m)
         
-        x_est = self.vae.decoder(z_est)
-        return x_est, T[None, :].repeat(x.shape[0], 1)
-        
-    def interpolate_code(self, x_1: torch.Tensor, x_2: torch.Tensor, num: int):
-        code1 = self.vae.encoder(x_1) # (batch, m)
-        code2 = self.vae.encoder(x_2) # (batch, m)
-        l_space = torch.linspace(0, 1, num, device=DEVICE)[None, :, None] # (1, num, 1)
-        code_inp = (1 - l_space) * code1[:, None, :] + l_space * code2[:, None, :] # (batch, num, m)
-        
-        out_shape = code_inp.shape
-        code_inp = code_inp.flatten(end_dim=-2) # (batch * num, m)
-        z_smp, mu, sigma = self.vae.latent_space_from_code(
-            code_inp, self.samples_num)  # (x_n, z_n, m)
-        
-        surv_func, _ = self.benk(*self._prepare_bg_data(code_inp.shape[0]), mu) # (batch, t_n)
-        
-        _, surv_steps = self.benk(*self._prepare_bg_data(code_inp.shape[0] * self.samples_num), z_smp.flatten(end_dim=-2)) # (x_n * z_n, t_n)
-        surv_steps = surv_steps.reshape(code_inp.shape[0], self.samples_num, -1) # (x_n, z_n, t_n)
-        
-        E_T = self.calc_exp_time(surv_func)  # (x_n)
-        
-        mu = mu[:, None, :].expand(-1, z_smp.shape[1], -1)
-        sigma = sigma[:, None, :].expand(-1, z_smp.shape[1], -1)
-        pdf = self.calc_pdf(z_smp.flatten(end_dim=-2), mu.flatten(end_dim=-2), sigma.flatten(end_dim=-2)).reshape(code_inp.shape[0], self.samples_num)  # (x_n, z_n)
-        
-        step = self.smoother(surv_steps, self.T_bg, E_T, True)
-    
-        pi = self.pi_head(step, pdf, E_T)
-        
-        z_est = torch.sum(pi[..., None] * z_smp, dim=1)  # (x_n, m)
-
-        x_est = self.vae.decoder(z_est)
-        return x_est.reshape(out_shape), E_T.reshape(x_1.shape[0], num) 
-        
+        T_out = T[None, :].repeat(x.shape[0], 1) # (x_n, p_n)
+        x_est = self.vae.decoder(torch.concat((z_est, T_out[..., None]), dim=-1))
+        return x_est, T_out
 
     def predict(self, x: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         with torch.no_grad():
@@ -523,36 +494,31 @@ class SurvivalMixup(torch.nn.Module):
             X = torch.from_numpy(x).to(DEVICE)
             x_est, T, = self.forward_trajectory(X, points_num, t_min, t_max, True)
             return x_est.cpu().numpy(), T.cpu().numpy()
-
-    def predict_interpolate(self, x_1: np.ndarray, x_2: np.ndarray, num: int = 100):
-        with torch.no_grad():
-            X_1, X_2 = torch.from_numpy(x_1).to(DEVICE), torch.from_numpy(x_2).to(DEVICE)
-            x, T = self.interpolate_code(X_1, X_2, num)
-            return x.cpu().numpy(), T.cpu().numpy()
         
     def sample_data(self, samples_num: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         with torch.no_grad():
             code = torch.normal(0, self.vae.sigma_z, (samples_num, self.vae.latent_dim), 
                                 device=DEVICE, dtype=torch.get_default_dtype())
-            x_est = self.vae.decoder(code)
-            mu = self.vae.encoder(x_est)
+            mu = code
             surv_func, surv_steps = self.benk(*self._prepare_bg_data(samples_num), mu) # (batch, t_n)
-            E_T = self.gen_exp_time(surv_steps) # (x_n)
-            X = x_est.cpu().numpy()
-            T = E_T.cpu().numpy()
+            # T_gen = self.gen_exp_time(surv_steps) # (x_n)
+            E_T = self.calc_exp_time(surv_func)
+            x_est = self.vae.decoder(torch.concat((code, E_T[:, None]), dim=-1))
+            # X = x_est.cpu().numpy()
+            # T = T_gen.cpu().numpy()
             
-            # x_proto = self.vae.decoder(code)
-            # x_list = []
-            # t_list = []
-            # X = TensorDataset(x_proto)
-            # batch = samples_num if self.batch_load is None else self.batch_load
-            # dl = DataLoader(X, batch, False)
-            # for x_b in dl:
-            #     x_est, E_T, *_ = self(x_b[0])
-            #     x_list.append(x_est.cpu().numpy())
-            #     t_list.append(E_T.cpu().numpy())
-            # X = np.concatenate(x_list, axis=0)
-            # T = np.concatenate(t_list, axis=0)
+            x_proto = x_est
+            x_list = []
+            t_list = []
+            X = TensorDataset(x_proto)
+            batch = samples_num if self.batch_load is None else self.batch_load
+            dl = DataLoader(X, batch, False)
+            for x_b in dl:
+                x_est, E_T, *_ = self(x_b[0])
+                x_list.append(x_est.cpu().numpy())
+                t_list.append(E_T.cpu().numpy())
+            X = np.concatenate(x_list, axis=0)
+            T = np.concatenate(t_list, axis=0)
             
         if self.cens_model:
             D_proba = self.cens_model.predict_proba(np.concatenate((X, T[:, None]), axis=-1))[:, 1]

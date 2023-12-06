@@ -8,43 +8,39 @@ from . import DEVICE
 class VAE(torch.nn.Module):
     def _get_encoder(self, dim_in: int, dim_latent: int) -> torch.nn.Sequential:
         return torch.nn.Sequential(
-            torch.nn.Linear(dim_in, 2 * dim_in),
-            torch.nn.ReLU6(),
-            torch.nn.Linear(2 * dim_in, dim_latent),
+            torch.nn.Linear(dim_in, 32),
             torch.nn.Tanh(),
-            # torch.nn.Linear(dim_latent, dim_latent),
-            # torch.nn.Tanh(),
-            # torch.nn.Linear(dim_latent, dim_latent),
-            # torch.nn.Tanh(),
-            torch.nn.Linear(dim_latent, dim_latent)
-        ).to(DEVICE)
-
-    def _get_mu(self, dim_in: int, dim_latent: int) -> torch.nn.Sequential:
-        return torch.nn.Sequential(
-            torch.nn.Linear(dim_in, dim_latent),
-            torch.nn.LeakyReLU(),
-            torch.nn.Linear(dim_latent, dim_latent)
+            torch.nn.Linear(32, 32),
+            torch.nn.Tanh(),
+            torch.nn.Linear(32, 32),
+            torch.nn.Tanh(),
+            torch.nn.Linear(32, 32),
+            torch.nn.Tanh(),
+            torch.nn.Linear(32, dim_latent)
         ).to(DEVICE)
 
     def _get_sigma(self, dim_in: int, dim_latent: int) -> torch.nn.Sequential:
         return torch.nn.Sequential(
-            torch.nn.Linear(dim_in, dim_latent),
+            torch.nn.Linear(dim_in, 32),
             torch.nn.Tanh(),
-            torch.nn.Linear(dim_latent, dim_latent)
+            torch.nn.Linear(32, dim_latent)
         ).to(DEVICE)
 
     def _get_decoder(self, dim_latent: int, dim_out: int) -> torch.nn.Sequential:
         return torch.nn.Sequential(
-            torch.nn.Linear(dim_latent, dim_latent),
+            torch.nn.Linear(dim_latent, 32),
             torch.nn.Tanh(),
-            torch.nn.Linear(dim_latent, dim_latent),
+            torch.nn.Linear(32, 32),
             torch.nn.Tanh(),
-            torch.nn.Linear(dim_latent, dim_latent),
+            torch.nn.Linear(32, 32),
             torch.nn.Tanh(),
-            torch.nn.Linear(dim_latent, dim_out)
+            torch.nn.Linear(32, 32),
+            torch.nn.Tanh(),
+            torch.nn.Linear(32, dim_out)
         ).to(DEVICE)
 
-    def __init__(self, latent_dim: int, regular_coef: float, sigma_z: float) -> None:
+    def __init__(self, latent_dim: int, regular_coef: float, sigma_z: float,
+                 encoder_dim: Optional[int]=None, decoder_dim: Optional[int]=None) -> None:
         super().__init__()
         self.reg_coef = regular_coef
         self.latent_dim = latent_dim
@@ -54,15 +50,17 @@ class VAE(torch.nn.Module):
         self.mu_nn = None
         self.sigma_nn = None
         self.sigma_z = sigma_z
+        self.enc_dim = encoder_dim
+        self.dec_dim = decoder_dim
 
     def _lazy_init(self, x: np.ndarray) -> None:
-        dim = x.shape[-1]
-        self.dim = dim
-
-        self.encoder = self._get_encoder(dim, self.latent_dim)
+        enc_dim = x.shape[-1] if self.enc_dim is None else self.enc_dim
+        dec_dim = self.latent_dim if self.dec_dim is None else self.dec_dim
+        
+        self.encoder = self._get_encoder(enc_dim, self.latent_dim)
         # self.mu_nn = self._get_mu(self.latent_dim, self.latent_dim)
         self.sigma_nn = self._get_sigma(self.latent_dim, self.latent_dim)
-        self.decoder = self._get_decoder(self.latent_dim, dim)
+        self.decoder = self._get_decoder(dec_dim, x.shape[-1])
         
     def kernel(self, x_diff: torch.Tensor) -> torch.Tensor:
         C = 2 * self.latent_dim * self.sigma_z * self.sigma_z

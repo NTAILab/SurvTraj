@@ -203,21 +203,21 @@ def x_experiment_spiral():
         lambda tau: tau + np.random.normal(0, 0.1, tau.shape),
     ]
     
-    x_train = []
-    t_train = []
+    x_train_list = []
+    t_train_list = []
     clr = ['r', 'b']
     fig, ax = plt.subplots(1, 1)
     for i in range(len(tau_bounds)):
         tau = np.random.uniform(*tau_bounds[i], (n_per_cls))
         X = spiral(tau)
         X += np.random.normal(0, noise_lvl, X.shape)
-        x_train.append(X)
+        x_train_list.append(X)
         t = responses[i](tau)
-        t_train.append(t)
+        t_train_list.append(t)
         ax.scatter(*X.T, c=clr[i], s=0.8)
-    x_train = np.concatenate(x_train, 0)
+    x_train = np.concatenate(x_train_list, 0)
     d_train = np.ones(x_train.shape[0])
-    t_train = np.concatenate(t_train, 0)
+    t_train = np.concatenate(t_train_list, 0)
     y = get_str_array(t_train, d_train)
     
     cls_centers = spiral(np.mean(tau_bounds, axis=-1))
@@ -274,6 +274,8 @@ def x_experiment_spiral():
     
     ax3d.scatter(*x_smp.T, T_smp, c='k')
     
+    draw_latent_space(model, *x_train_list)
+    
     plt.show()
     
 def x_experiment_moons():
@@ -295,8 +297,8 @@ def x_experiment_moons():
         lambda X: (-X[:, 0] + 5) * 5 + np.random.normal(0, 0.5, X.shape[0]),
     ]
     
-    x_train = []
-    t_train = []
+    x_train_list = []
+    t_train_list = []
     clr = ['r', 'b']
     # fig, ax = plt.subplots(1, 1)
     # fig = plt.figure()
@@ -306,17 +308,17 @@ def x_experiment_moons():
         x = moon(y, *cls_params[i])
         X = np.stack((x, y), axis=-1)
         X += np.random.normal(0, noise_lvl, X.shape)
-        x_train.append(X)
+        x_train_list.append(X)
         t = responses[i](X)
-        t_train.append(t)
+        t_train_list.append(t)
         # ax.scatter(*X.T, c=clr[i], s=0.8)
         # ax3d.scatter(*X.T, t, c=clr[i])
-    x_train = np.concatenate(x_train, 0)
+    x_train = np.concatenate(x_train_list, 0)
     mean = np.mean(x_train, 0, keepdims=True)
     std = np.std(x_train, 0, keepdims=True)
     x_train = (x_train - mean) / std
     d_train = np.ones(x_train.shape[0])
-    t_train = np.concatenate(t_train, 0)
+    t_train = np.concatenate(t_train_list, 0)
     y = get_str_array(t_train, d_train)
     
     cls_centers = (np.asarray(
@@ -392,6 +394,8 @@ def x_experiment_moons():
     x_smp, T_smp, D_smp = model.sample_data(500)
     
     ax3d.scatter(*x_smp.T, T_smp, c='k')
+    
+    draw_latent_space(model, *x_train_list)
         
     plt.show()
     
@@ -518,21 +522,21 @@ def x_experiment_overlap():
         lambda tau: 10 + np.random.normal(0, 0.1, tau.shape),
     ]
     
-    x_train = []
-    t_train = []
+    x_train_list = []
+    t_train_list = []
     clr = ['r', 'b']
     fig, ax = plt.subplots(1, 1)
     for i in range(len(tau_bounds)):
         tau = np.random.uniform(*tau_bounds[i], (n_per_cls))
         X = spiral(tau)
         X += np.random.normal(0, noise_lvl, X.shape)
-        x_train.append(X)
+        x_train_list.append(X)
         t = responses[i](tau)
-        t_train.append(t)
+        t_train_list.append(t)
         ax.scatter(*X.T, c=clr[i], s=0.8)
-    x_train = np.concatenate(x_train, 0)
+    x_train = np.concatenate(x_train_list, 0)
     d_train = np.ones(x_train.shape[0])
-    t_train = np.concatenate(t_train, 0)
+    t_train = np.concatenate(t_train_list, 0)
     y = get_str_array(t_train, d_train)
     
     cls_centers = spiral(np.mean(tau_bounds, axis=-1))
@@ -577,7 +581,7 @@ def x_experiment_overlap():
         ax3d.scatter(*x_explain[i].T, T_life[i], c=e_clr[i])
         
     fig = plt.figure()
-    fig.suptitle('Trajectories')
+    fig.suptitle('Sampling')
     ax3d = fig.add_subplot(111, projection='3d')
     for i in range(len(tau_bounds)):
         cur_points = x_train[i * n_per_cls : (i + 1) * n_per_cls]
@@ -586,6 +590,8 @@ def x_experiment_overlap():
     
     x_smp, T_smp, D_smp = model.sample_data(500)
     ax3d.scatter(*x_smp.T, T_smp, c='k')
+    
+    draw_latent_space(model, *x_train_list)
     
     plt.show()
     
@@ -724,10 +730,10 @@ def veterans_exp():
     real_ds_test(*loader.load_veterans_lung_cancer, 'Veterans')
     
 def whas500_exp():
-    vae_kw['latent_dim'] = 18
+    vae_kw['latent_dim'] = 32
     mixup_kw['batch_num'] = 16
     mixup_kw['epochs'] = 100
-    mixup_kw['benk_vae_loss_rat'] = 0.55
+    mixup_kw['benk_vae_loss_rat'] = 0.25
     loader = sksurv_loader()
     real_ds_test(*loader.load_whas500, 'WHAS500')
     
@@ -751,23 +757,23 @@ def aids_exp():
     
 if __name__=='__main__':
     vae_kw = {
-        'latent_dim': 8,
+        'latent_dim': 10,
         'regular_coef': 60,
         'sigma_z': 1
     }
     mixup_kw = {
         'vae_kw': vae_kw,
-        'samples_num': 64,
+        'samples_num': 48,
         'batch_num': 16,
-        'epochs': 150,
+        'epochs': 80,
         'lr_rate': 2e-3,
         'benk_vae_loss_rat': 0.2,
         'c_ind_temp': 1,
-        'gumbel_tau': 0.50,
+        'gumbel_tau': 1.0,
         'train_bg_part': 0.6,
         'batch_load': None,
     }
-    x_experiment_linear()
+    # x_experiment_linear()
     # x_experiment_spiral()
     # x_experiment_moons()
     # x_experiment_curves()
@@ -775,6 +781,6 @@ if __name__=='__main__':
     # censored_exp()
     
     # veterans_exp()
-    # whas500_exp()
+    whas500_exp()
     # gbsg2_exp()
     # aids_exp()
