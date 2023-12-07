@@ -2,12 +2,13 @@ from argparse import ArgumentParser
 from abc import ABC, abstractstaticmethod, abstractmethod
 from time import gmtime, strftime, time
 import numpy as np
+from numpy.random import RandomState
 from surv_vae.surv_mixup import SurvivalMixup
-from sklearn.model_selection import RandomizedSearchCV, KFold
+from sklearn.model_selection import RandomizedSearchCV, StratifiedKFold
 from sklearn.ensemble import RandomForestClassifier
 from surv_vae.utility import TYPE, sksurv_loader
 from sksurv.ensemble import RandomSurvivalForest
-from typing import Optional, Tuple, Dict, Type
+from typing import Any, Iterator, Optional, Tuple, Dict, Type
 from sklearn.model_selection import train_test_split
 from collections import defaultdict
 import json
@@ -139,6 +140,18 @@ class SurvMixupWrapper(ModelWrapper):
     def get_name() -> str:
         return 'Surv VAE'
     
+class DeltaStratifiedKFold(StratifiedKFold):
+    def __init__(self, n_splits: int = 5, *, 
+                 shuffle: bool = False, 
+                 random_state: int | RandomState | None = None) -> None:
+        super().__init__(n_splits, shuffle=shuffle, random_state=random_state)
+    
+    def split(self, X: np.ndarray, 
+              y: np.recarray, 
+              groups: Any = None) -> Iterator[Any]:
+        delta = y[TYPE[0][0]]
+        return super().split(X, delta, groups)
+    
 class SurvForestWrapper(ModelWrapper):
     def __init__(self, folds_n: int, cv_iters: int, 
                  n_jobs: int, seed: Optional[int] = None):
@@ -154,7 +167,9 @@ class SurvForestWrapper(ModelWrapper):
         self.model = None
     
     def fit(self, ds: Dataset):
-        cv_strat = KFold(self.folds_n, random_state=self.seed, shuffle=True) # todo: make out how to use StratifiedKFold
+        cv_strat = DeltaStratifiedKFold(self.folds_n, 
+                                        random_state=self.seed, 
+                                        shuffle=True)
         cv = RandomizedSearchCV(RandomSurvivalForest(), self.forest_grid, cv=cv_strat, 
                                 n_iter=self.cv_iters, n_jobs=self.n_jobs,
                                 random_state=self.seed)
