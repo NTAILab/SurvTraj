@@ -115,8 +115,11 @@ class SurvivalMixup(torch.nn.Module):
         self.uncens_part = None
         self.train_bg_part = train_bg_part
         self.gumbel_tau = gumbel_tau
+        self.T_std = 1
 
     def _lazy_init(self, x: np.ndarray, y: np.recarray):
+        self.T_std = np.std(y['time'])
+        self.T_mean = np.mean(y['time'])
         self.pi_head = PiHead(None)
         self.vae.dec_dim = self.vae.latent_dim + 1
         self.vae._lazy_init(x)
@@ -410,7 +413,8 @@ class SurvivalMixup(torch.nn.Module):
         # pi = self.pi_head(step, pdf)  # (batch, z_n, 1)
         z_est = torch.sum(pi[..., None] * z_smp, dim=1)  # (x_n, m)
 
-        x_est = self.vae.decoder(torch.concat((z_est, E_T[:, None]), dim=-1))
+        T_feat = ((E_T - self.T_mean) / self.T_std)[:, None]
+        x_est = self.vae.decoder(torch.concat((z_est, T_feat), dim=-1))
 
         return x_est, T_gen, z_smp[:, 0, ...], mu_out, sigma_out
     
@@ -465,7 +469,8 @@ class SurvivalMixup(torch.nn.Module):
         z_est = torch.sum(pi[..., None] * z_smp, dim=1)  # (x_n, p_n, m)
         
         T_out = T[None, :].repeat(x.shape[0], 1) # (x_n, p_n)
-        x_est = self.vae.decoder(torch.concat((z_est, T_out[..., None]), dim=-1))
+        T_feat = ((T_out - self.T_mean) / self.T_std)[..., None]
+        x_est = self.vae.decoder(torch.concat((z_est, T_feat), dim=-1))
         return x_est, T_out
 
     def predict(self, x: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -503,7 +508,8 @@ class SurvivalMixup(torch.nn.Module):
             surv_func, surv_steps = self.benk(*self._prepare_bg_data(samples_num), mu) # (batch, t_n)
             # T_gen = self.gen_exp_time(surv_steps) # (x_n)
             E_T = self.calc_exp_time(surv_func)
-            x_est = self.vae.decoder(torch.concat((code, E_T[:, None]), dim=-1))
+            T_feat = ((E_T - self.T_mean) / self.T_std)[:, None]
+            x_est = self.vae.decoder(torch.concat((code, T_feat), dim=-1))
             # X = x_est.cpu().numpy()
             # T = T_gen.cpu().numpy()
             

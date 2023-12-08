@@ -1,189 +1,14 @@
 from argparse import ArgumentParser
-from abc import ABC, abstractstaticmethod, abstractmethod
 from time import gmtime, strftime, time
 import numpy as np
-from numpy.random import RandomState
-from surv_vae.surv_mixup import SurvivalMixup
-from sklearn.model_selection import RandomizedSearchCV, StratifiedKFold
+from datasets import Dataset, get_ds_map, Veterans
 from sklearn.ensemble import RandomForestClassifier
-from surv_vae.utility import TYPE, sksurv_loader
-from sksurv.ensemble import RandomSurvivalForest
-from typing import Any, Iterator, Optional, Tuple, Dict, Type
-from sklearn.model_selection import train_test_split
+from models import ModelWrapper, SurvMixupWrapper
+from typing import Optional, Dict, Type
 from collections import defaultdict
+from inspect import isabstract
+from surv_vae.utility import get_all_subclasses
 import json
-
-class Dataset(ABC):
-    # full data is N samples
-    # then test is test_part * N,
-    # train is (1 - test_part) * (1 - val_part) * N
-    # validation is (1 - test_part) * val_part * N
-    # stratification is done according to the delta
-    def __init__(self, x: np.ndarray, y: np.recarray,
-                 val_part: float, test_part: float,
-                 seed: Optional[int] = None):
-        self.x = x
-        self.y = y
-        self.val_part = val_part
-        self.test_part = test_part
-        self.seed = seed if seed is not None else np.random.randint(0, 4096)
-        self.dim = x.shape[1]
-        
-    def get_train_test_set(self) -> Tuple[np.ndarray, np.recarray, np.ndarray, np.recarray]:
-        x_train, x_test, y_train, y_test = train_test_split(self.x, self.y, 
-                                                            test_size=self.test_part,\
-                                                            random_state=self.seed,
-                                                            stratify=self.y[TYPE[0][0]])
-        return x_train, y_train, x_test, y_test
-    
-    def get_ttv_set(self) -> Tuple[np.ndarray, np.recarray, np.ndarray, np.recarray, np.ndarray, np.recarray]:
-        tt_set = self.get_train_test_set()
-        x_train, x_val, y_train, y_val = train_test_split(tt_set[0], tt_set[1],
-                                                          test_size=self.val_part,
-                                                          random_state=self.seed,
-                                                          stratify=tt_set[1][TYPE[0][0]])
-        return x_train, y_train, tt_set[2], tt_set[3], x_val, y_val
-    
-    @abstractstaticmethod
-    def get_name() -> str:
-        pass
-
-class Veterans(Dataset):
-    def __init__(self, val_part: float, test_part: float, seed: int | None = None):
-        loader = sksurv_loader()
-        x, y = loader.load_veterans_lung_cancer
-        super().__init__(x, y, val_part, test_part, seed)
-    
-    @staticmethod
-    def get_name() -> str:
-        return 'veterans'
-    
-class WHAS500(Dataset):
-    def __init__(self, val_part: float, test_part: float, seed: int | None = None):
-        loader = sksurv_loader()
-        x, y = loader.load_whas500
-        super().__init__(x, y, val_part, test_part, seed)
-    
-    @staticmethod
-    def get_name() -> str:
-        return 'whas500'
-    
-class GBSG2(Dataset):
-    def __init__(self, val_part: float, test_part: float, seed: int | None = None):
-        loader = sksurv_loader()
-        x, y = loader.load_gbsg2
-        super().__init__(x, y, val_part, test_part, seed)
-    
-    @staticmethod
-    def get_name() -> str:
-        return 'gbsg2'
-    
-def get_ds_map() -> Dict[str, Dataset]:
-    ds_list = Dataset.__subclasses__()
-    ds_map = dict()
-    for ds_cls in ds_list:
-        ds_map[ds_cls.get_name()] = ds_cls
-    return ds_map
-
-class ModelWrapper(ABC):
-    def __init__(self):
-        pass
-    
-    @abstractmethod
-    def fit(self, ds: Dataset) -> None:
-        pass
-    
-    @abstractstaticmethod
-    def get_name() -> str:
-        pass
-    
-    @abstractmethod
-    def score(self, ds: Dataset) -> float:
-        pass
-    
-class SurvMixupWrapper(ModelWrapper):
-    def __init__(self, samples_num: int,
-                 latent_dim: int, 
-                 regular_coef: float, 
-                 sigma_z: float = 1,
-                 batch_num: int = 20,
-                 epochs: int = 100,
-                 lr_rate: float = 0.001,
-                 benk_vae_loss_rat: float = 0.2,
-                 c_ind_temp: float = 1.0,
-                 gumbel_tau: float = 1.0,
-                 train_bg_part: float = 0.6,
-                 cens_cls_model = None,
-                 batch_load: Optional[int] = 256,
-                 patience: int = 10):
-        vae_kw = {
-            'latent_dim': latent_dim,
-            'regular_coef': regular_coef,
-            'sigma_z': sigma_z,
-        }
-        if cens_cls_model is None:
-            cens_cls_model = RandomForestClassifier()
-        self.model = SurvivalMixup(vae_kw, samples_num, batch_num,
-                                   epochs, lr_rate, benk_vae_loss_rat,
-                                   c_ind_temp, gumbel_tau, train_bg_part,
-                                   cens_cls_model, batch_load, patience)
-    
-    def fit(self, ds: Dataset):
-        x_nn_train, y_nn_train, _, _, *val_set = ds.get_ttv_set()
-        self.model.fit(x_nn_train, y_nn_train, val_set)
-        
-    def score(self, ds: Dataset):
-        _, _, x_test, y_test = ds.get_train_test_set()
-        return self.model.score(x_test, y_test)
-    
-    @staticmethod
-    def get_name() -> str:
-        return 'Surv VAE'
-    
-class DeltaStratifiedKFold(StratifiedKFold):
-    def __init__(self, n_splits: int = 5, *, 
-                 shuffle: bool = False, 
-                 random_state: int | RandomState | None = None) -> None:
-        super().__init__(n_splits, shuffle=shuffle, random_state=random_state)
-    
-    def split(self, X: np.ndarray, 
-              y: np.recarray, 
-              groups: Any = None) -> Iterator[Any]:
-        delta = y[TYPE[0][0]]
-        return super().split(X, delta, groups)
-    
-class SurvForestWrapper(ModelWrapper):
-    def __init__(self, folds_n: int, cv_iters: int, 
-                 n_jobs: int, seed: Optional[int] = None):
-        self.folds_n = folds_n
-        self.forest_grid = {
-            'n_estimators': [10, 50, 100, 200],
-            'max_depth': [3, 4, 5, 6],
-            'min_samples_leaf': [1, 0.01, 0.05, 0.1],
-        }
-        self.cv_iters = cv_iters
-        self.seed = seed
-        self.n_jobs = n_jobs
-        self.model = None
-    
-    def fit(self, ds: Dataset):
-        cv_strat = DeltaStratifiedKFold(self.folds_n, 
-                                        random_state=self.seed, 
-                                        shuffle=True)
-        cv = RandomizedSearchCV(RandomSurvivalForest(), self.forest_grid, cv=cv_strat, 
-                                n_iter=self.cv_iters, n_jobs=self.n_jobs,
-                                random_state=self.seed)
-        x_train, y_train, _, _ = ds.get_train_test_set()
-        cv.fit(x_train, y_train)
-        self.model = cv.best_estimator_
-    
-    def score(self, ds: Dataset):
-        _, _, x_test, y_test = ds.get_train_test_set()
-        return self.model.score(x_test, y_test)
-    
-    @staticmethod
-    def get_name() -> str:
-        return 'Surv RForest'
 
 class Experiment():
     METRIC_NAME = 'C_index'
@@ -208,7 +33,7 @@ class Experiment():
             if model_cls is SurvMixupWrapper:
                 params[model_name] = lambda : {
                     'samples_num': 48,
-                    'latent_dim': int(self.ds.dim * 1.5), 
+                    'latent_dim': int(np.ceil(self.ds.dim * 1.5)), 
                     'regular_coef': 66, 
                     'sigma_z': 1,
                     'batch_num': 20,
@@ -235,8 +60,8 @@ class Experiment():
         return self.models_params[model_name]()
         
     def get_models(self) -> Dict[str, Type[ModelWrapper]]:
-        models = ModelWrapper.__subclasses__()
-        result = dict((model.get_name(), model) for model in models)
+        models = get_all_subclasses(ModelWrapper)
+        result = dict((model.get_name(), model) for model in models if not isabstract(model))
         return result
     
     def exp_iter(self):
@@ -299,7 +124,7 @@ def cli():
     assert 0 < args.val_part < 1, 'Test part must be in (0, 1)'
     
     if args.output is None:
-        output_file = f"{args.dataset}_exp {strftime('%m_%d %H_%M_%S', gmtime())}.json"
+        output_file = f"{args.dataset}_exp {strftime('%d_%m %H_%M_%S', gmtime())}.json"
     else:
         output_file = args.output
     
@@ -318,7 +143,7 @@ if __name__ == '__main__':
         experiment.run()
         experiment.dump_results()
     except Exception as e:
-        backup_name = f'experiment_{experiment.ds.get_name()}_backup_' + strftime('%m_%d %H_%M_%S', gmtime()) + '.json'
+        backup_name = f'experiment_{experiment.ds.get_name()}_backup_' + strftime('%d_%m %H_%M_%S', gmtime()) + '.json'
         with open(backup_name, 'w') as file:
             json.dump(experiment.exp_results, file, indent=1)
         raise e

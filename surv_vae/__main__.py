@@ -651,7 +651,7 @@ def censored_exp():
     
     
 def real_ds_test(x, y, name='real ds'):
-    # seed = 123
+    # y['time'] /= 1000
     def draw_tsne(x_list, name_list=None):
         X = np.concatenate(x_list, 0)
         z = TSNE().fit_transform(X)
@@ -730,20 +730,20 @@ def veterans_exp():
     real_ds_test(*loader.load_veterans_lung_cancer, 'Veterans')
     
 def whas500_exp():
-    vae_kw['latent_dim'] = 32
+    vae_kw['latent_dim'] = 20
     mixup_kw['batch_num'] = 16
-    mixup_kw['epochs'] = 100
-    mixup_kw['benk_vae_loss_rat'] = 0.25
+    mixup_kw['epochs'] = 120
+    mixup_kw['benk_vae_loss_rat'] = 0.55
     loader = sksurv_loader()
     real_ds_test(*loader.load_whas500, 'WHAS500')
     
 def gbsg2_exp():
-    vae_kw['latent_dim'] = 18
+    vae_kw['latent_dim'] = 12
     mixup_kw['batch_num'] = 20
     mixup_kw['epochs'] = 100
     mixup_kw['benk_vae_loss_rat'] = 0.66
     mixup_kw['gumbel_tau'] = 1
-    mixup_kw['c_ind_temp'] = 2
+    mixup_kw['c_ind_temp'] = 1
     loader = sksurv_loader()
     real_ds_test(*loader.load_gbsg2, 'GBSG2')
     
@@ -781,6 +781,6 @@ if __name__=='__main__':
     # censored_exp()
     
     # veterans_exp()
-    whas500_exp()
-    # gbsg2_exp()
+    # whas500_exp()
+    gbsg2_exp()
     # aids_exp()

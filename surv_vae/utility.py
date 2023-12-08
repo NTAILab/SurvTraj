@@ -1,9 +1,16 @@
 import numpy as np
 import sksurv.datasets as ds
 from sksurv.column import encode_categorical, standardize
+from typing import Set, TypeVar
 import torch
 
 TYPE = [('censor', '?'), ('time', 'f8')]
+
+T = TypeVar('T')
+
+def get_all_subclasses(cls: T) -> Set[T]:
+    return set(cls.__subclasses__()).union(
+        [s for c in cls.__subclasses__() for s in get_all_subclasses(c)])
 
 class sksurv_loader():
     def __init__(self, z_normalization=True) -> None:
