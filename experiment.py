@@ -13,11 +13,14 @@ import json
 class Experiment():
     METRIC_NAME = 'C_index'
     
-    def __init__(self, dataset: Dataset, 
-                 iter_n: int, folds_n: int, cv_iters: int, n_jobs: int, 
+    def __init__(self, dataset: Dataset, iter_n: int,
+                 epochs: int, patience: int,
+                 folds_n: int, cv_iters: int, n_jobs: int, 
                  seed:Optional[int]=None, output_file: Optional[str]=None):
         self.ds = dataset
         self.iter_n = iter_n
+        self.epochs = epochs
+        self.patience = patience
         self.out_file = output_file
         self.rng = np.random.default_rng(seed)
         self.folds_n = folds_n
@@ -34,18 +37,18 @@ class Experiment():
                 params[model_name] = lambda : {
                     'samples_num': 48,
                     'latent_dim': int(np.ceil(self.ds.dim * 1.5)), 
-                    'regular_coef': 66, 
+                    'regular_coef': 60, 
                     'sigma_z': 1,
                     'batch_num': 20,
-                    'epochs': 100,
-                    'lr_rate': 0.001,
-                    'benk_vae_loss_rat': 0.2,
+                    'epochs': self.epochs,
+                    'lr_rate': 2e-3,
+                    'benk_vae_loss_rat': 0.5,
                     'c_ind_temp': 1.0,
                     'gumbel_tau': 1.0,
                     'train_bg_part': 0.6,
                     'cens_cls_model': RandomForestClassifier(),
                     'batch_load': 256,
-                    'patience': 5
+                    'patience': self.patience
                 }
             else:
                 params[model_name] = lambda : {
@@ -75,13 +78,19 @@ class Experiment():
         return iter_results
             
     
-    def run(self):
+    def run(self, verbose: int = 0):
         self.exp_results = defaultdict(list)
+        verb_counter = 0
         for i in range(self.iter_n):
             self.ds.seed = self.rng.integers(1, 4096)
             iter_results = self.exp_iter()
             for key, val in iter_results.items():
                 self.exp_results[key].append(val)
+            if verbose > 0:
+                verb_counter += 1
+                if verb_counter == verbose:
+                    verb_counter = 0
+                    self.dump_results()
             print(f'Experiment iteration {i} is passed')
         return self.exp_results
     
@@ -98,6 +107,8 @@ DEFAULT_TEST_PART = 0.4
 DEFAULT_FOLDS_N = 3
 DEFAULT_CV_JOBS = 6
 DEFAULT_CV_ITERS = 10
+DEFAULT_EPOCHS = 200
+DEFAULT_PATIENCE = 10
 
 def cli():
     parser = ArgumentParser('surv_vae experiment script')
@@ -111,7 +122,8 @@ def cli():
     parser.add_argument('--folds_n', type=int, default=DEFAULT_FOLDS_N, help='Number of the folds in the CV')
     parser.add_argument('--cv_jobs', type=int, default=DEFAULT_CV_JOBS, help='Number of the parallel jobs in the CV')
     parser.add_argument('--cv_iters', type=int, default=DEFAULT_CV_ITERS, help='Number of the iterations in the randomized CV')
-    
+    parser.add_argument('--epochs', type=int, default=DEFAULT_EPOCHS, help='Number of epochs during nn training')
+    parser.add_argument('--patience', type=int, default=DEFAULT_PATIENCE, help='Number of validation patience epochs during nn training')
 
     args = parser.parse_args()
     
@@ -119,6 +131,8 @@ def cli():
     assert args.folds_n > 0, 'Folds number must be positive'
     assert args.cv_jobs > 0, 'CV jobs number must be positive'
     assert args.cv_iters > 0, 'CV iterations number must be positive'
+    assert args.epochs > 0, 'Epochs number must be positive'
+    assert args.patience >= 0, 'Patience number must be non-negative'
     assert args.seed is None or args.seed >= 0, 'Random seed must be non-negative'
     assert 0 < args.test_part < 1, 'Test part must be in (0, 1)'
     assert 0 < args.val_part < 1, 'Test part must be in (0, 1)'
@@ -133,20 +147,15 @@ def cli():
     if ds_cls is None:
         raise AttributeError(f"Dataset {args.dataset} is not found")
     ds = ds_cls(args.val_part, args.test_part, args.seed)
-    return Experiment(ds, args.iter_n, args.folds_n, args.cv_iters, args.cv_jobs, args.seed, output_file)
+    return Experiment(ds, args.iter_n, args.epochs, args.patience, 
+                      args.folds_n, args.cv_iters, args.cv_jobs, 
+                      args.seed, output_file)
     
 
 if __name__ == '__main__':
     experiment = cli()
     time_stamp = time()
-    try:
-        experiment.run()
-        experiment.dump_results()
-    except Exception as e:
-        backup_name = f'experiment_{experiment.ds.get_name()}_backup_' + strftime('%d_%m %H_%M_%S', gmtime()) + '.json'
-        with open(backup_name, 'w') as file:
-            json.dump(experiment.exp_results, file, indent=1)
-        raise e
+    experiment.run(verbose=1)
     time_elapsed = int(time() - time_stamp)
     print('Time elapsed: ', time_elapsed // 60, ' min.', time_elapsed % 60, ' sec.')
     
