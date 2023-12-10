@@ -36,17 +36,17 @@ class Experiment():
             if model_cls is SurvMixupWrapper:
                 params[model_name] = lambda : {
                     'samples_num': 48,
-                    'latent_dim': int(np.ceil(self.ds.dim * 1.5)), 
-                    'regular_coef': 60, 
+                    'latent_dim': int(np.ceil(self.ds.dim * 1.8)), 
+                    'regular_coef': 40, 
                     'sigma_z': 1,
-                    'batch_num': 20,
+                    'batch_num': 16,
                     'epochs': self.epochs,
                     'lr_rate': 2e-3,
                     'benk_vae_loss_rat': 0.5,
                     'c_ind_temp': 1.0,
-                    'gumbel_tau': 1.0,
+                    'gumbel_tau': 0.75,
                     'train_bg_part': 0.6,
-                    'cens_cls_model': RandomForestClassifier(),
+                    'cens_cls_model': None,
                     'batch_load': 256,
                     'patience': self.patience
                 }
@@ -101,14 +101,14 @@ class Experiment():
             json.dump(self.exp_results, file, indent=1)
 
 DEFAULT_DS = Veterans.get_name()
-DEFAULT_EXP_ITERS = 3
-DEFAULT_VAL_PART = 0.25
+DEFAULT_EXP_ITERS = 10
+DEFAULT_VAL_PART = 0.33
 DEFAULT_TEST_PART = 0.4
 DEFAULT_FOLDS_N = 3
-DEFAULT_CV_JOBS = 6
+DEFAULT_CV_JOBS = 4
 DEFAULT_CV_ITERS = 10
-DEFAULT_EPOCHS = 200
-DEFAULT_PATIENCE = 10
+DEFAULT_EPOCHS = 500
+DEFAULT_PATIENCE = 20
 
 def cli():
     parser = ArgumentParser('surv_vae experiment script')

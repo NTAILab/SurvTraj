@@ -236,7 +236,7 @@ class CoxnetWrapper(CVWrapper):
         return super().fit(ds)
     
     def get_base_model(self):
-        return CoxnetSurvivalAnalysis(n_alphas=1, l1_ratio=0.75)
+        return CoxnetSurvivalAnalysis(n_alphas=1, l1_ratio=0.75, normalize=False)
     
     @staticmethod
     def get_name() -> str:

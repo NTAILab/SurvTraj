@@ -9,5 +9,5 @@ def print_summary(filename):
             print(f'\tmean: {np.mean(val)}, std: {np.std(val)}')
             
 if __name__=='__main__':
-    filename = 'Veterans_1.json'
+    filename = 'VetTry.json'
     print_summary(filename)
