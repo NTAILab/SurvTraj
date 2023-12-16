@@ -1,7 +1,7 @@
 from argparse import ArgumentParser
 from time import gmtime, strftime, time
 import numpy as np
-from datasets import Dataset, get_ds_map, Veterans
+from datasets import Dataset, get_ds_map, Veterans, GBSG2
 from sklearn.ensemble import RandomForestClassifier
 from models import ModelWrapper, SurvMixupWrapper
 from typing import Optional, Dict, Type
@@ -35,16 +35,16 @@ class Experiment():
         for model_name, model_cls in models_dict.items():
             if model_cls is SurvMixupWrapper:
                 params[model_name] = lambda : {
-                    'samples_num': 48,
+                    'samples_num': 64,
                     'latent_dim': int(np.ceil(self.ds.dim * 1.8)), 
-                    'regular_coef': 40, 
+                    'regular_coef': 60, 
                     'sigma_z': 1,
                     'batch_num': 16,
                     'epochs': self.epochs,
                     'lr_rate': 2e-3,
-                    'benk_vae_loss_rat': 0.5,
+                    'benk_vae_loss_rat': 0.75,
                     'c_ind_temp': 1.0,
-                    'gumbel_tau': 0.75,
+                    'gumbel_tau': 1.00,
                     'train_bg_part': 0.6,
                     'cens_cls_model': None,
                     'batch_load': 256,

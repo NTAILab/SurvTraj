@@ -60,7 +60,7 @@ class SurvMixupWrapper(ModelWrapper):
         super().__init__()
     
     def fit(self, ds: Dataset):
-        x_nn_train, y_nn_train, _, _, *val_set = ds.get_ttv_set()
+        x_nn_train, y_nn_train, x_test, y_test, *val_set = ds.get_ttv_set()
         self.model.fit(x_nn_train, y_nn_train, val_set)
         
     def score(self, ds: Dataset):
@@ -128,7 +128,7 @@ class SurvForestWrapper(CVWrapper):
         }
         
     def get_base_model(self):
-        return RandomSurvivalForest()
+        return RandomSurvivalForest(random_state=self.seed)
     
     @staticmethod
     def get_name() -> str:

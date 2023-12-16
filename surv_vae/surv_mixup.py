@@ -143,22 +143,21 @@ class SurvivalMixup(torch.nn.Module):
     
     def forward_exp_time(self, x: torch.Tensor) -> torch.Tensor:
         x_latent = self.vae.encoder(x)#self.vae.mu_nn(self.vae.encoder(x))
-        surv_func, _ = self.benk(*self._prepare_bg_data(x.shape[0]), x_latent)
+        surv_func, surv_steps = self.benk(*self._prepare_bg_data(x.shape[0]), x_latent)
         E_T = self.calc_exp_time(surv_func)
+        # T_gen = self.gen_exp_time(surv_steps)
         return E_T
     
     def calc_val_loss(self, val_set: Tuple):
         with torch.no_grad():
             E_T = self.forward_exp_time(val_set[0])
             E_T = E_T.cpu().numpy()
-        c_ind, *_ = concordance_index_censored(np.ones_like(E_T, np.bool_), val_set[1], -E_T)
+        c_ind, *_ = concordance_index_censored(val_set[1]['censor'], val_set[1]['time'], -E_T)
         return c_ind
     
     def prepare_val_set(self, val_set: Tuple[np.ndarray, np.recarray]) -> Tuple[torch.Tensor, torch.Tensor]:
-        d_mask = val_set[1]['censor'] == 1
-        X = torch.tensor(val_set[0][d_mask], dtype=torch.get_default_dtype(), device=DEVICE)
-        T = val_set[1]['time'][d_mask].copy()
-        return X, T
+        X = torch.tensor(val_set[0], dtype=torch.get_default_dtype(), device=DEVICE)
+        return X, val_set[1]
         
         
     def fit(self, x: np.ndarray, y: np.recarray, 
@@ -185,12 +184,16 @@ class SurvivalMixup(torch.nn.Module):
         print('Background volume:', back_size)
         sub_batch_len = self.batch_load if self.batch_load is not None else x.shape[0] - back_size
         
+        train_T = y['time'].copy()
+        train_D = y['censor'].copy()
+        self.uncens_part = np.sum(train_D) / train_D.shape[0]
+        X_full_tens = torch.from_numpy(x).type(torch.get_default_dtype()).to(DEVICE)
+        T_full_tens = torch.from_numpy(train_T).type(torch.get_default_dtype()).to(DEVICE)
+        D_full_tens = torch.from_numpy(train_D).type(torch.int).to(DEVICE)
+        
         for e in range(1, self.epochs + 1):
             cum_loss, cum_x_loss, cum_reg_loss, cum_benk_loss, cum_val_t_loss = 0, 0, 0, 0, 0
             i = 0
-            train_T = y['time'].copy()
-            train_D = y['censor'].copy()
-            self.uncens_part = np.sum(train_D) / train_D.shape[0]
             data = dataset_generator(x, train_T, train_D, back_size, self.batch_num)
             X_back = torch.from_numpy(data[0]).type(
                 torch.get_default_dtype()).to(DEVICE)
@@ -275,6 +278,7 @@ class SurvivalMixup(torch.nn.Module):
                 summary_writer.add_scalars('train_metrics', epoch_metrics, e)
             if val_set is not None:
                 cur_patience += 1
+                self._set_background(X_full_tens, T_full_tens, D_full_tens)
                 val_loss = self.calc_val_loss(val_prepaired_data)
                 if val_loss >= best_val_loss:
                     best_val_loss = val_loss
@@ -287,14 +291,7 @@ class SurvivalMixup(torch.nn.Module):
                     print('Early stopping!')
                     self.load_state_dict(weights)
                     break
-                    
-        self._set_background(
-            torch.from_numpy(x).type(
-                torch.get_default_dtype()).to(DEVICE),
-            torch.from_numpy(y['time'].copy()).type(
-                torch.get_default_dtype()).to(DEVICE),
-            torch.from_numpy(y['censor'].copy()).type(torch.int).to(DEVICE)
-        )
+        self._set_background(X_full_tens, T_full_tens, D_full_tens)
         time_elapsed = time.time() - start_time
         print('Training time:', round(time_elapsed, 1), 's.')
         if log_dir is not None:
