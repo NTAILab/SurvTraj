@@ -413,7 +413,7 @@ class SurvivalMixup(torch.nn.Module):
         T_feat = ((E_T - self.T_mean) / self.T_std)[:, None]
         x_est = self.vae.decoder(torch.concat((z_est, T_feat), dim=-1))
 
-        return x_est, T_gen, z_smp[:, 0, ...], mu_out, sigma_out
+        return x_est, E_T, z_smp[:, 0, ...], mu_out, sigma_out
     
     def forward_trajectory(self, x: torch.Tensor, points_num: int, t_min: float, t_max: float, f_single_samples_set=True):
         sampler_mlp = 1 if f_single_samples_set else points_num

@@ -2,7 +2,7 @@ import torch
 from numpy import sqrt
 from . import EPSILON, DEVICE
 
-class NNKernel(torch.nn.Module):
+class FullNNKernel(torch.nn.Module):
     def __init__(self, m) -> None:
         super().__init__()
         # s = int(sqrt(m))
@@ -30,6 +30,32 @@ class NNKernel(torch.nn.Module):
         norm_weights = W / sum
         norm_weights[bad_idx] = 0
         return norm_weights
+
+class NestedNNKernel(torch.nn.Module):
+    def __init__(self, m) -> None:
+        super().__init__()
+        self.nn = torch.nn.Sequential(
+            torch.nn.Linear(m, 2 * m),
+            torch.nn.Tanh(),
+            torch.nn.Linear(2 * m, 2 * m),
+            torch.nn.Tanh(),
+            torch.nn.Linear(2 * m, m),
+        ).to(DEVICE)
+
+    def forward(self, x_1, x_2):
+        stack = torch.stack((x_1, x_2), dim=1)
+        nn_res = self.nn(stack)
+        x_1_nn = nn_res[:, 0, :]
+        x_2_nn = nn_res[:, 1, :]
+        metric = torch.linalg.vector_norm(x_1_nn - x_2_nn, dim=-1, keepdim=True)
+        weights = torch.exp(-metric)
+        sum = torch.sum(weights, dim=-2, keepdim=True).broadcast_to(weights.shape).clone()
+        bad_idx = sum < 1e-13
+        sum[bad_idx] = 1
+        norm_weights = weights / sum
+        norm_weights[bad_idx] = 0
+        return norm_weights # (x_n_1, x_n_2, ..., 1)
+
     
 class SimpleGauss(torch.nn.Module):
     def __init__(self, norm_axis: int=-2):
@@ -56,7 +82,7 @@ class BENK(torch.nn.Module):
     def __init__(self, dim) -> None:
         super().__init__()
         self.kernel = SimpleGauss()
-        # self.kernel = NNKernel(dim)
+        # self.kernel = NestedNNKernel(dim)
 
     def forward(self, x_in, delta_in, x_p):
         n = x_in.shape[1]

@@ -1,7 +1,7 @@
 from argparse import ArgumentParser
 from time import gmtime, strftime, time
 import numpy as np
-from datasets import Dataset, get_ds_map, Veterans, GBSG2
+from datasets import Dataset, get_ds_map, Veterans, GBSG2, WHAS500
 from sklearn.ensemble import RandomForestClassifier
 from models import ModelWrapper, SurvMixupWrapper
 from typing import Optional, Dict, Type
@@ -35,14 +35,14 @@ class Experiment():
         for model_name, model_cls in models_dict.items():
             if model_cls is SurvMixupWrapper:
                 params[model_name] = lambda : {
-                    'samples_num': 64,
-                    'latent_dim': int(np.ceil(self.ds.dim * 1.8)), 
-                    'regular_coef': 60, 
+                    'samples_num': 48,
+                    'latent_dim': int(np.ceil(1.8 * self.ds.dim)), 
+                    'regular_coef': 20, 
                     'sigma_z': 1,
-                    'batch_num': 16,
+                    'batch_num': 10,
                     'epochs': self.epochs,
                     'lr_rate': 2e-3,
-                    'benk_vae_loss_rat': 0.75,
+                    'benk_vae_loss_rat': 0.9,
                     'c_ind_temp': 1.0,
                     'gumbel_tau': 1.00,
                     'train_bg_part': 0.6,
@@ -105,10 +105,10 @@ DEFAULT_EXP_ITERS = 10
 DEFAULT_VAL_PART = 0.33
 DEFAULT_TEST_PART = 0.4
 DEFAULT_FOLDS_N = 3
-DEFAULT_CV_JOBS = 4
+DEFAULT_CV_JOBS = 6
 DEFAULT_CV_ITERS = 10
 DEFAULT_EPOCHS = 500
-DEFAULT_PATIENCE = 20
+DEFAULT_PATIENCE = 30
 
 def cli():
     parser = ArgumentParser('surv_vae experiment script')

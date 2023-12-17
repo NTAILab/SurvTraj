@@ -14,8 +14,6 @@ class VAE(torch.nn.Module):
             # torch.nn.Linear(2 * dim_latent, 2 * dim_latent),
             # torch.nn.Sigmoid(),
             # torch.nn.Linear(48, 48),
-            # torch.nn.Tanh(),
-            torch.nn.Linear(32, 32),
             torch.nn.Tanh(),
             torch.nn.Linear(32, 32),
             torch.nn.Tanh(),
@@ -23,6 +21,8 @@ class VAE(torch.nn.Module):
             # torch.nn.Tanh(),
             # torch.nn.Linear(32, 32),
             # torch.nn.Tanh(),
+            torch.nn.Linear(32, 32),
+            torch.nn.Tanh(),
             torch.nn.Linear(32, dim_latent)
         ).to(DEVICE)
 
