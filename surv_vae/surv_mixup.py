@@ -229,7 +229,7 @@ class SurvivalMixup(torch.nn.Module):
                 for x_t_b, t_t_b, d_t_b in target_loader:
                     x_t_b, t_t_b, d_t_b = x_t_b.to(DEVICE), t_t_b.to(DEVICE), d_t_b.to(DEVICE)
                 
-                    x_est, E_T, z, mu, sigma = self(x_t_b)
+                    x_est, E_T, T_gen, z, mu, sigma = self(x_t_b)
 
                     # uncens_mask = d_t == 1
                     # benk_loss = self.benk_loss(E_T[uncens_mask], t_t[uncens_mask])
@@ -298,12 +298,14 @@ class SurvivalMixup(torch.nn.Module):
             summary_writer.close()
         self.eval()
         if self.cens_model is not None:
-            self.fit_cens_model(x, train_T, train_D)
+            with torch.no_grad():
+                x_latent = self.vae.encoder(X_full_tens).cpu().numpy()
+                self.fit_cens_model(x_latent, train_T, train_D)
         return self
 
     def fit_cens_model(self, x: np.ndarray, t: np.ndarray, d: np.ndarray):
         train_data = np.concatenate((x, t[:, None]), axis=-1)
-        self.cens_model.fit(train_data, d)
+        self.cens_model.fit(train_data, d.astype(np.int0))
         
     def _prepare_bg_data(self, batch_num: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         code_bg = self.vae.encoder(self.X_bg)
@@ -410,10 +412,10 @@ class SurvivalMixup(torch.nn.Module):
         # pi = self.pi_head(step, pdf)  # (batch, z_n, 1)
         z_est = torch.sum(pi[..., None] * z_smp, dim=1)  # (x_n, m)
 
-        T_feat = ((E_T - self.T_mean) / self.T_std)[:, None]
+        T_feat = ((T_gen - self.T_mean) / self.T_std)[:, None]
         x_est = self.vae.decoder(torch.concat((z_est, T_feat), dim=-1))
 
-        return x_est, E_T, z_smp[:, 0, ...], mu_out, sigma_out
+        return x_est, E_T, T_gen, z_smp[:, 0, ...], mu_out, sigma_out
     
     def forward_trajectory(self, x: torch.Tensor, points_num: int, t_min: float, t_max: float, f_single_samples_set=True):
         sampler_mlp = 1 if f_single_samples_set else points_num
@@ -473,28 +475,34 @@ class SurvivalMixup(torch.nn.Module):
     def predict(self, x: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         with torch.no_grad():
             x_list = []
-            t_list = []
+            t_gen_list = []
+            e_t_list = []
+            mu_list = []
             X = TensorDataset(torch.from_numpy(x).to('cpu'))
             batch = x.shape[0] if self.batch_load is None else self.batch_load
             dl = DataLoader(X, batch, False)
             for x_b in dl:
                 X_b = x_b[0].to(DEVICE)
-                x_est, E_T, *_ = self(X_b)
+                x_est, E_T, T_gen, *_, mu, _ = self(X_b)
                 x_list.append(x_est.cpu().numpy())
-                t_list.append(E_T.cpu().numpy())
+                t_gen_list.append(T_gen.cpu().numpy())
+                e_t_list.append(E_T.cpu().numpy())
+                mu_list.append(mu.cpu().numpy())
             X = np.concatenate(x_list, axis=0)
-            T = np.concatenate(t_list, axis=0)
+            T_gen = np.concatenate(t_gen_list, axis=0)
+            E_T = np.concatenate(e_t_list, axis=0)
+            Mu = np.concatenate(mu_list, axis=0)
             if self.cens_model is not None:
-                D_proba = self.cens_model.predict_proba(np.concatenate((X, T[:, None]), -1))[:, 1]
+                D_proba = self.cens_model.predict_proba(np.concatenate((Mu, T_gen[:, None]), -1))[:, 1]
             else:
                 D_proba = self.uncens_part
             D = np.random.binomial(1, D_proba, x.shape[0])
-            return X, T, D
+            return X, T_gen, D, E_T
         
-    def predict_trajectory(self, x: np.ndarray, points_num: int, t_min: float, t_max: float)  -> Tuple[np.ndarray, np.ndarray]:
+    def predict_trajectory(self, x: np.ndarray, points_num: int, t_min: float, t_max: float, multi_sampling: bool=False)  -> Tuple[np.ndarray, np.ndarray]:
         with torch.no_grad():
             X = torch.from_numpy(x).to(DEVICE)
-            x_est, T, = self.forward_trajectory(X, points_num, t_min, t_max, True)
+            x_est, T, = self.forward_trajectory(X, points_num, t_min, t_max, not multi_sampling)
             return x_est.cpu().numpy(), T.cpu().numpy()
         
     def sample_data(self, samples_num: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -503,9 +511,9 @@ class SurvivalMixup(torch.nn.Module):
                                 device=DEVICE, dtype=torch.get_default_dtype())
             mu = code
             surv_func, surv_steps = self.benk(*self._prepare_bg_data(samples_num), mu) # (batch, t_n)
-            # T_gen = self.gen_exp_time(surv_steps) # (x_n)
-            E_T = self.calc_exp_time(surv_func)
-            T_feat = ((E_T - self.T_mean) / self.T_std)[:, None]
+            T_gen = self.gen_exp_time(surv_steps) # (x_n)
+            # E_T = self.calc_exp_time(surv_func)
+            T_feat = ((T_gen - self.T_mean) / self.T_std)[:, None]
             x_est = self.vae.decoder(torch.concat((code, T_feat), dim=-1))
             # X = x_est.cpu().numpy()
             # T = T_gen.cpu().numpy()
@@ -513,18 +521,21 @@ class SurvivalMixup(torch.nn.Module):
             x_proto = x_est
             x_list = []
             t_list = []
+            mu_list = []
             X = TensorDataset(x_proto)
             batch = samples_num if self.batch_load is None else self.batch_load
             dl = DataLoader(X, batch, False)
             for x_b in dl:
-                x_est, E_T, *_ = self(x_b[0])
+                x_est, _, T_gen, *_, mu, _ = self(x_b[0])
                 x_list.append(x_est.cpu().numpy())
-                t_list.append(E_T.cpu().numpy())
+                t_list.append(T_gen.cpu().numpy())
+                mu_list.append(mu.cpu().numpy())
             X = np.concatenate(x_list, axis=0)
             T = np.concatenate(t_list, axis=0)
+            Mu = np.concatenate(mu_list, axis=0)
             
         if self.cens_model:
-            D_proba = self.cens_model.predict_proba(np.concatenate((X, T[:, None]), axis=-1))[:, 1]
+            D_proba = self.cens_model.predict_proba(np.concatenate((Mu, T[:, None]), axis=-1))[:, 1]
         else:
             D_proba = self.uncens_part
         D = np.random.binomial(1, D_proba, samples_num)

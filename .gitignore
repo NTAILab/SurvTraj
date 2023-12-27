@@ -2,6 +2,8 @@ __pycache__
 .vscode
 
 TensorBoard
+catboost_info
+paper_pictures
 /backups
 *.json
 *.txt

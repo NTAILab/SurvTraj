@@ -36,14 +36,14 @@ class Experiment():
             if model_cls is SurvMixupWrapper:
                 params[model_name] = lambda : {
                     'samples_num': 48,
-                    'latent_dim': int(np.ceil(1.8 * self.ds.dim)), 
-                    'regular_coef': 20, 
+                    'latent_dim': 16, 
+                    'regular_coef': 25, 
                     'sigma_z': 1,
-                    'batch_num': 10,
+                    'batch_num': 15,
                     'epochs': self.epochs,
                     'lr_rate': 2e-3,
-                    'benk_vae_loss_rat': 0.9,
-                    'c_ind_temp': 1.0,
+                    'benk_vae_loss_rat': 0.6,
+                    'c_ind_temp': 1,
                     'gumbel_tau': 1.00,
                     'train_bg_part': 0.6,
                     'cens_cls_model': None,
@@ -108,7 +108,7 @@ DEFAULT_FOLDS_N = 3
 DEFAULT_CV_JOBS = 6
 DEFAULT_CV_ITERS = 10
 DEFAULT_EPOCHS = 500
-DEFAULT_PATIENCE = 30
+DEFAULT_PATIENCE = 20
 
 def cli():
     parser = ArgumentParser('surv_vae experiment script')
