@@ -39,10 +39,10 @@ class Experiment():
                     'latent_dim': 16, 
                     'regular_coef': 25, 
                     'sigma_z': 1,
-                    'batch_num': 15,
+                    'batch_num': 16,
                     'epochs': self.epochs,
                     'lr_rate': 2e-3,
-                    'benk_vae_loss_rat': 0.6,
+                    'benk_vae_loss_rat': 1.0,
                     'c_ind_temp': 1,
                     'gumbel_tau': 1.00,
                     'train_bg_part': 0.6,
@@ -101,7 +101,7 @@ class Experiment():
             json.dump(self.exp_results, file, indent=1)
 
 DEFAULT_DS = Veterans.get_name()
-DEFAULT_EXP_ITERS = 10
+DEFAULT_EXP_ITERS = 20
 DEFAULT_VAL_PART = 0.33
 DEFAULT_TEST_PART = 0.4
 DEFAULT_FOLDS_N = 3

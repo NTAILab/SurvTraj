@@ -14,7 +14,6 @@ from .utility import get_str_array, sksurv_loader
 from sklearn.manifold import TSNE
 from sklearn.metrics import roc_auc_score
 from scipy.stats import normaltest
-from . import DEVICE
 from torch import tensor, get_default_dtype as tens_type, no_grad
 
 
@@ -25,7 +24,7 @@ def draw_latent_space(model, *args):
     fig, ax = plt.subplots(1, 1)
     X = np.concatenate(args, axis=0)
     with no_grad():
-        _, _, _, Z, mu, *_ = model(tensor(X, dtype=tens_type(), device=DEVICE))
+        _, _, _, Z = model(tensor(X, dtype=tens_type(), device=model.device))
         Z = Z.cpu().numpy()
     print('Latent space std:', np.std(Z, 0))
     _, p_val = normaltest(Z)
@@ -126,13 +125,13 @@ def x_experiment_linear():
         (cls_centers, (cls_centers[None, -1] + cls_centers[None, -2]) / 2, (cls_centers[None, -3] + cls_centers[None, -4]) / 2),
         axis=0
     )
-    x_ec, T, D, E_T = model.predict(exp_points_2d)
+    x_ec, T, D = model.predict_recon(exp_points_2d)
+    E_T = model.predict_exp_time(exp_points_2d)
     print(E_T)
     fig, ax = draw_train_set_2d('Reconstruction')
     ax.scatter(*exp_points_2d.T, c='k', marker='*', s=50, label='Original points')
     ax.scatter(*x_ec.T, c='m', marker='^', s=50, label='Reconstruction')
     ax.legend()
-    
     
     exp_points = np.concatenate([
             # (cls_centers[None, -1] + cls_centers[None, -2]) / 2,
@@ -143,7 +142,8 @@ def x_experiment_linear():
         ], axis=0,
     )
     
-    x_e_all, T_gen, D_all, E_T  = model.predict(x_train)
+    x_e_all, T_gen, D_all  = model.predict_recon(x_train)
+    E_T = model.predict_exp_time(x_train)
     
     fig, ax3d = draw_train_set_3d('Reconstruction', '$T_{gen}$')
     ax3d.scatter(*x_e_all.T, T_gen, c='k', label='Reconstructions')
@@ -153,14 +153,16 @@ def x_experiment_linear():
     ax3d.scatter(*x_e_all.T, E_T, c='k', label='Reconstructions')
     ax3d.legend()
 
-    x_explain, T_life = model.predict_trajectory(exp_points, 100, t_train.min(), t_train.max())
+    t_traj = np.linspace(t_train.min(), t_train.max(), 50)
+    t_traj = np.tile(t_traj[None, :], (len(exp_points), 1))
+    x_explain = model.predict_trajectory(exp_points, t_traj)
     
     fig, ax3d = draw_train_set_3d('Trajectories', 't')
     
     lab_list = ['A', 'B']
     clr_t = ['teal', 'tomato']
     for i in range(exp_points.shape[0]):
-        ax3d.scatter(*x_explain[i].T, T_life[i], c=clr_t[i], label='Trajectory ' + lab_list[i])
+        ax3d.scatter(*x_explain[i].T, t_traj[i], c=clr_t[i], label='Trajectory ' + lab_list[i])
         
     ax3d.legend()
         
@@ -265,7 +267,7 @@ def x_experiment_moons():
             ax3d.scatter(*x_clusters[i].T, t_clusters[i], c=clr[i], label='Cluster ' + str(i + 1))
         return fig, ax3d
     
-    x_e_all, T_gen, D_all, E_T  = model.predict(x_train)
+    x_e_all, T_gen, D_all, E_T  = model.predict_recon(x_train)
     
     fig, ax3d = draw_train_set_3d('Reconstruction', '$T_{gen}$')
     ax3d.scatter(*x_e_all.T, T_gen, c='k', label='Reconstructions')
@@ -371,7 +373,7 @@ def x_experiment_overlap():
     date_str = strftime('%m_%d %H_%M_%S', gmtime())
     model.fit(x_train, y, log_dir='TensorBoard/overlap/' + date_str)
     
-    x_e_all, T_gen, D_all, E_T = model.predict(x_train)
+    x_e_all, T_gen, D_all, E_T = model.predict_recon(x_train)
     
     fig, ax3d = draw_train_set_3d('Reconstruction', '$T_{gen}$')
     ax3d.scatter(*x_e_all.T, T_gen, c='k', label='Reconstruction')
@@ -449,11 +451,11 @@ def censored_exp():
     
     x_train = X
     y_train = get_str_array(Y, D)
-    model = SurvivalMixup(cens_cls_model=RandomForestClassifier(n_estimators=100), **mixup_kw)
+    model = SurvivalMixup(cens_clf_model=RandomForestClassifier(n_estimators=100), **mixup_kw)
     date_str = strftime('%m_%d %H_%M_%S', gmtime())
     model.fit(x_train, y_train, log_dir='TensorBoard/censor/' + date_str)
     
-    x_recon, t_gen, d_recon, e_t = model.predict(x_train)
+    x_recon, t_gen, d_recon, e_t = model.predict_recon(x_train)
     draw_set_2d('Recontruction', x_recon[d_recon == 0], x_recon[d_recon == 1])
     draw_set_3d('Recontruction', '$T_{gen}$', x_recon[d_recon == 0], t_gen[d_recon == 0], x_recon[d_recon == 1], t_gen[d_recon == 1])
     draw_set_3d('Recontruction', '$\\hat{T}$', x_recon[d_recon == 0], e_t[d_recon == 0], x_recon[d_recon == 1], e_t[d_recon == 1])
@@ -504,12 +506,12 @@ def real_ds_test(x, y, name='real ds', cens_clf=None):
     km_fig, km_axis = draw_kaplan(y['time'], y['censor'], 'Original data', clr='orange')
     
     
-    model = SurvivalMixup(cens_cls_model=RandomForestClassifier() if cens_clf is None else cens_clf, **mixup_kw)
+    model = SurvivalMixup(cens_clf_model=RandomForestClassifier() if cens_clf is None else cens_clf, **mixup_kw)
     date_str = strftime('%m_%d %H_%M_%S', gmtime())
     model.fit(x, y, log_dir=f'TensorBoard/{name}/{date_str}')
     # model.samples_num = 64
     model.batch_load = 256
-    x_rec, t_gen, d_rec, _ = model.predict(x)
+    x_rec, t_gen, d_rec, _ = model.predict_recon(x)
     x_samples, t_samples, d_samples = model.sample_data(x.shape[0])
 
     tsne_clr = ['b', 'r']
@@ -602,15 +604,16 @@ if __name__=='__main__':
         'vae_kw': vae_kw,
         'samples_num': 48,
         'batch_num': 16,
-        'epochs': 50,
-        'lr_rate': 2e-3,
-        'benk_vae_loss_rat': 0.4,
+        'epochs': 30,
+        'lr_rate': 5e-3,
+        'beran_vae_loss_rat': 0.5,
         'c_ind_temp': 1,
         'gumbel_tau': 1.0,
         'train_bg_part': 0.6,
         'batch_load': None,
+        'device': 'cuda:0',
     }
-    # x_experiment_linear()
+    x_experiment_linear()
     # x_experiment_spiral()
     # x_experiment_moons()
     # x_experiment_curves()
@@ -618,6 +621,6 @@ if __name__=='__main__':
     # censored_exp()
     
     # veterans_exp()
-    whas500_exp()
+    # whas500_exp()
     # gbsg2_exp()
     # aids_exp()
