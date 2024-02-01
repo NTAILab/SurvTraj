@@ -19,4 +19,5 @@ class SoftminStepSmoother(torch.nn.Module):
         proba = torch.sum(t_weights[:, None, ...] * surv_steps, dim=-1) # (batch, z_n, p_n)
         if proba.shape[-1] == 1:
             proba.squeeze_(-1) # (batch, z_n)
+        assert not torch.any(torch.isnan(proba))
         return proba

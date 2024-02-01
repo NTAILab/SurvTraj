@@ -604,7 +604,7 @@ if __name__=='__main__':
         'vae_kw': vae_kw,
         'samples_num': 48,
         'batch_num': 16,
-        'epochs': 30,
+        'epochs': 50,
         'lr_rate': 5e-3,
         'beran_vae_loss_rat': 0.5,
         'c_ind_temp': 1,

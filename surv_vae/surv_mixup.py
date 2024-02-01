@@ -79,7 +79,7 @@ class SurvivalMixup(torch.nn.Module):
                  beran_vae_loss_rat: float = 0.2,
                  c_ind_temp: float = 1.0,
                  gumbel_tau: float = 1.0,
-                 samples_sigma: float = 0.1,
+                 samples_sigma: float = 0.05,
                  train_bg_part: float = 0.6,
                  traj_penalty_points_n: int = 10,
                  cens_clf_model = None,
@@ -303,6 +303,8 @@ class SurvivalMixup(torch.nn.Module):
     def _prepare_bg_data(self, batch_num: int, mlp_coef: int = 1) -> Tuple[torch.Tensor, torch.Tensor]:
         z_bg = self.vae(self.X_bg, mlp_coef).flatten(end_dim=-2)
         z_bg = z_bg[None, ...].expand(batch_num, -1, -1)
+        # mu, sigma = self.vae.get_mu_sigma(self.X_bg)
+        # z_bg = mu[None, ...].expand(batch_num, -1, -1)
         D_bg = self.D_bg[:, None].expand(-1, mlp_coef).ravel()
         D_bg = self.D_bg[None, :].expand(batch_num, -1)
         return z_bg, D_bg
@@ -353,10 +355,12 @@ class SurvivalMixup(torch.nn.Module):
         if surv_steps.ndim == 3:
             t_diff_corr = t_diff_corr[None, ...]
             mask = mask[None, ...]
-        proba = surv_steps / torch.sum(surv_steps, -1, keepdim=True)
+        # proba = surv_steps / torch.sum(surv_steps, -1, keepdim=True)
+        proba = surv_steps
         proba = proba / t_diff_corr
         mask = mask.broadcast_to(proba.shape)
         proba[mask] = 0
+        assert not torch.any(torch.isnan(proba))
         return proba
     
     # calculate the survival function and histogram based on it
@@ -385,8 +389,8 @@ class SurvivalMixup(torch.nn.Module):
             z_i_n = self.samples_num * tr_len
         else:
             z_i_n = self.samples_num
-        # z_i_sigma = torch.ones_like(z) * self.z_i_sigma
-        z_i_sigma = self.sigma_nn(z)
+        z_i_sigma = torch.ones_like(z) * self.z_i_sigma
+        # z_i_sigma = torch.exp(self.sigma_nn(z))
         z_i = self.vae.gen_samples(z, z_i_sigma, z_i_n).reshape(-1, z.shape[-1]) # (batch * z_i_n, dim)
         z_expanded = z[:, None, :].expand(-1, z_i_n, -1).reshape(z_i.shape) # (batch * z_i_n, dim)
         z_i_sigma_expanded = z_i_sigma[:, None, :].expand(-1, z_i_n, -1).reshape(z_i.shape) # (batch * z_i_n, dim)
@@ -395,8 +399,10 @@ class SurvivalMixup(torch.nn.Module):
         
         _, surv_steps = self.beran(*self._prepare_bg_data(z_i.shape[0]), z_i) # (batch * z_i_n, t_n)
         pi_t_z = self.surv_steps_to_proba(surv_steps) # (batch * z_i_n, t_n)
+        # assert not torch.any(torch.isnan(pi_t_z))
         bg_times = self.T_bg[:-1] + self.T_diff_prob / 2
         pi_t_z = self.smoother(pi_t_z, bg_times, t, self.samples_num) # (batch, z_i_n, p_n) or (batch, z_i_n)
+        # assert not torch.any(torch.isnan(pi_t_z))
         if f_trajectory:
             if f_single_set:
                 pi_z = torch.reshape(pi_z, (z.shape[0], self.samples_num, 1)) # (batch, z_i_n, 1)
@@ -409,18 +415,22 @@ class SurvivalMixup(torch.nn.Module):
             z_i = torch.reshape(z_i, (z.shape[0], self.samples_num, z.shape[-1]))
         weights = self.calc_xi_weights(pi_t_z, pi_z) # same as input, weighted within 1'st dim
         z_prot = torch.sum(weights[..., None] * z_i, dim=1) # (batch, z_dim) or (batch, p_n, z_dim)
+        assert not torch.any(torch.isnan(z_prot))
         return z_prot
         
         
     # from x to its reconstrucrion and estimated time
     def forward(self, x: torch.Tensor):
         z = self.vae(x)
+        # mu, _ = self.vae.get_mu_sigma(x)
         surv_func, surv_steps = self.beran(*self._prepare_bg_data(z.shape[0]), z) # (batch, t_n)
         T_gen = self.gen_evt_time(surv_steps) # (x_n)
         E_T = self.calc_exp_time(surv_func)
         xi_z = self.calc_prototype(z, T_gen)
         T_feat = ((T_gen - self.T_mean) / self.T_std)[:, None]
         x_est = self.vae.decoder(torch.concat((xi_z, T_feat), dim=-1))
+        # x_est = self.vae.decoder(xi_z)
+        assert not torch.any(torch.isnan(x_est))
         return x_est, E_T, T_gen, z
     
     def forward_trajectory(self, x: torch.Tensor, t: torch.Tensor, f_single_samples_set=True):
@@ -429,6 +439,7 @@ class SurvivalMixup(torch.nn.Module):
         xi_z = self.calc_prototype(z, t, f_single_samples_set)
         T_feat = ((t - self.T_mean) / self.T_std)[..., None]
         x_est = self.vae.decoder(torch.concat((xi_z, T_feat), dim=-1))
+        # x_est = self.vae.decoder(xi_z)
         return x_est
 
     # conditional sampling, E_T here is not for the output
@@ -467,6 +478,7 @@ class SurvivalMixup(torch.nn.Module):
             xi_z = self.calc_prototype(z, T)
             T_feat = ((T - self.T_mean) / self.T_std)[:, None]
             x_est = self.vae.decoder(torch.concat((xi_z, T_feat), dim=-1))
+            # x_est = self.vae.decoder(xi_z)
             return x_est
     
     # t is 2 dim, unique vector for each x
@@ -494,6 +506,7 @@ class SurvivalMixup(torch.nn.Module):
             xi_z = self.calc_prototype(eps, T_gen)
             T_feat = ((T_gen - self.T_mean) / self.T_std)[:, None]
             x_est = self.vae.decoder(torch.concat((xi_z, T_feat), dim=-1))
+            # x_est = self.vae.decoder(xi_z)
             T_gen = T_gen.cpu().numpy()
             x_est = x_est.cpu().numpy()
             if self.cens_model is not None:

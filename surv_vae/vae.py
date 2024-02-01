@@ -17,7 +17,7 @@ class VAE(torch.nn.Module):
             torch.nn.Tanh(),
             torch.nn.Linear(16, 16),
             torch.nn.Tanh(),
-            torch.nn.Linear(16, 2 * dim_latent)
+            torch.nn.Linear(16, dim_latent)
         ).to(self.device)
 
 
@@ -35,6 +35,14 @@ class VAE(torch.nn.Module):
             torch.nn.Tanh(),
             torch.nn.Linear(32, dim_out)
         ).to(self.device)
+        
+    
+    def _get_sigma(self, dim_in: int, dim_latent: int) -> torch.nn.Sequential:
+        return torch.nn.Sequential(
+            torch.nn.Linear(dim_in, 2 * dim_latent),
+            torch.nn.Tanh(),
+            torch.nn.Linear(2 * dim_latent, dim_latent)
+        ).to(self.device)
 
     def __init__(self, latent_dim: int, regular_coef: float, sigma_z: float, device: torch.device,
                  encoder_dim: Optional[int]=None, decoder_dim: Optional[int]=None) -> None:
@@ -44,6 +52,7 @@ class VAE(torch.nn.Module):
         self.latent_dim = latent_dim
         self.encoder = None
         self.decoder = None
+        self.sigma_nn = None
         self.sigma_z = sigma_z
         self.enc_dim = encoder_dim
         self.dec_dim = decoder_dim
@@ -54,11 +63,14 @@ class VAE(torch.nn.Module):
         
         self.encoder = self._get_encoder(enc_dim, self.latent_dim)
         self.decoder = self._get_decoder(dec_dim, x.shape[-1])
+        self.sigma_nn = self._get_sigma(self.latent_dim, self.latent_dim)
         
     def get_mu_sigma(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        code = self.encoder(x)
-        mu = code[:, :self.latent_dim]
-        sigma = torch.exp(code[:, self.latent_dim:])
+        # code = self.encoder(x)
+        # mu = code[:, :self.latent_dim]
+        # sigma = torch.exp(code[:, self.latent_dim:])
+        mu = self.encoder(x)
+        sigma = self.sigma_nn(mu)
         return mu, sigma
         
     def kernel(self, x_diff: torch.Tensor) -> torch.Tensor:
