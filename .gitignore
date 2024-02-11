@@ -4,6 +4,7 @@ __pycache__
 TensorBoard
 catboost_info
 paper_pictures
+paper_pictures.old
 /backups
 *.json
 *.txt

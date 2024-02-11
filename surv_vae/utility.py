@@ -1,8 +1,11 @@
 import numpy as np
 import sksurv.datasets as ds
 from sksurv.column import encode_categorical, standardize
-from typing import Set, TypeVar
+from typing import Set, TypeVar, Tuple, Dict, List, Optional
 import torch
+from matplotlib.figure import Figure
+from matplotlib.axes import Axes
+import matplotlib.pyplot as plt
 
 TYPE = [('censor', '?'), ('time', 'f8')]
 
@@ -42,3 +45,17 @@ class TempTanh(torch.nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.gain * torch.tanh(x)
 
+def get_traject_plot(x: np.ndarray, t: np.ndarray, 
+                     plot_kw: Optional[Dict] = None, 
+                     labels: Optional[List[str]] = None) -> Tuple[Figure, Axes]:
+    fig, ax = plt.subplots(1, 1, dpi=100, figsize=(6, 6))
+    if plot_kw is None:
+        plot_kw = dict()
+    for i in range(x.shape[1]):
+        lbl = f'$x_{{{i + 1}}}$' if labels is None else labels[i]
+        ax.plot(t, x[:, i], label=lbl, **plot_kw)
+    ax.grid()
+    ax.legend()
+    ax.set_xlabel('t')
+    ax.set_ylabel('y_i')
+    return fig, ax

@@ -8,7 +8,7 @@ from sksurv.ensemble import RandomSurvivalForest
 import numpy as np
 import matplotlib.pyplot as plt
 from time import gmtime, strftime
-from .utility import get_str_array, sksurv_loader
+from .utility import get_str_array, sksurv_loader, get_traject_plot
 
 
 from sklearn.manifold import TSNE
@@ -99,7 +99,7 @@ def x_experiment_linear():
     model.fit(x_train, y, log_dir='TensorBoard/linear/' + date_str)
     
     def draw_train_set_2d(name):
-        fig, ax = plt.subplots(1, 1, dpi=100)
+        fig, ax = plt.subplots(1, 1, dpi=100, figsize=(6, 6))
         fig.suptitle(name)
         ax.set_xlabel('$x_1$')
         ax.set_ylabel('$x_2$')
@@ -111,7 +111,7 @@ def x_experiment_linear():
         return fig, ax
     
     def draw_train_set_3d(name, z_name):
-        fig = plt.figure(dpi=100)
+        fig = plt.figure(dpi=100, figsize=(6, 6))
         fig.suptitle(name)
         ax3d = fig.add_subplot(111, projection='3d')
         ax3d.set_xlabel('$x_1$')
@@ -129,8 +129,8 @@ def x_experiment_linear():
     E_T = model.predict_exp_time(exp_points_2d)
     print(E_T)
     fig, ax = draw_train_set_2d('Reconstruction')
-    ax.scatter(*exp_points_2d.T, c='k', marker='*', s=50, label='Original points')
-    ax.scatter(*x_ec.T, c='m', marker='^', s=50, label='Reconstruction')
+    ax.scatter(*exp_points_2d.T, c='k', marker='*', s=50, label='Test points')
+    ax.scatter(*x_ec.T, c='m', marker='^', s=50, label='Sampled points')
     ax.legend()
     
     exp_points = np.concatenate([
@@ -152,10 +152,14 @@ def x_experiment_linear():
     fig, ax3d = draw_train_set_3d('Reconstruction', '$\\hat{T}$')
     ax3d.scatter(*x_e_all.T, E_T, c='k', label='Reconstructions')
     ax3d.legend()
+    
+    fig, ax = draw_train_set_2d('Reconstruction')
+    ax.scatter(*x_e_all.T, c='k', s=1, label='Reconstructions')
+    ax.legend()
 
-    t_traj = np.linspace(t_train.min(), t_train.max(), 50)
+    t_traj = np.linspace(t_train.min(), t_train.max(), 100)
     t_traj = np.tile(t_traj[None, :], (len(exp_points), 1))
-    x_explain = model.predict_trajectory(exp_points, t_traj)
+    x_explain = model.predict_trajectory(exp_points, t_traj, True)
     
     fig, ax3d = draw_train_set_3d('Trajectories', 't')
     
@@ -165,24 +169,28 @@ def x_experiment_linear():
         ax3d.scatter(*x_explain[i].T, t_traj[i], c=clr_t[i], label='Trajectory ' + lab_list[i])
         
     ax3d.legend()
-        
+    
+    markers = ['^', 'X']
     fig, ax = draw_train_set_2d('Trajectories')
     for i in range(2):
-        ax.scatter(*x_explain[i].T, s=40, c=clr_t[i], label='Trajectory ' + lab_list[i])
-        ax.scatter(*exp_points[i].T, s=50, c=clr_t[i], marker='*', label='Point ' + lab_list[i])
+        ax.scatter(*x_explain[i].T, s=10, c=clr_t[i], label='Trajectory ' + lab_list[i])
+        ax.scatter(*exp_points[i].T, s=100, c='k', edgecolors='w', zorder=100,
+                   marker=markers[i], label='Point ' + lab_list[i])
     ax.legend()
     
-    fig, ax3d = draw_train_set_3d('Sampling', '$T_{gen}$')
+    # fig, ax3d = draw_train_set_3d('Sampling', '$T_{gen}$')
     
-    x_smp, T_smp, D_smp = model.sample_data(300)
+    # x_smp, T_smp, D_smp = model.sample_data(300)
     
-    ax3d.scatter(*x_smp.T, T_smp, c='k', label='Sampled points')
-    ax3d.legend()
-    fig, ax = draw_train_set_2d('Sampling')
-    ax.scatter(*x_smp.T, s=10, c='k', label='Sampled points')
-    ax.legend()
+    # ax3d.scatter(*x_smp.T, T_smp, c='k', label='Sampled points')
+    # ax3d.legend()
+    # fig, ax = draw_train_set_2d('Sampling')
+    # ax.scatter(*x_smp.T, s=10, c='k', label='Sampled points')
+    # ax.legend()
     
     draw_latent_space(model, *x_clusters)
+    
+    get_traject_plot(x_explain[0], t_traj[0])
     
     plt.show()
     
@@ -245,7 +253,7 @@ def x_experiment_moons():
     # exp_points = cls_centers
     
     def draw_train_set_2d(name):
-        fig, ax = plt.subplots(1, 1, dpi=100)
+        fig, ax = plt.subplots(1, 1, dpi=100, figsize=(6, 6))
         fig.suptitle(name)
         ax.set_xlabel('$x_1$')
         ax.set_ylabel('$x_2$')
@@ -257,7 +265,7 @@ def x_experiment_moons():
         return fig, ax
     
     def draw_train_set_3d(name, z_name):
-        fig = plt.figure(dpi=100)
+        fig = plt.figure(dpi=100, figsize=(6, 6))
         fig.suptitle(name)
         ax3d = fig.add_subplot(111, projection='3d')
         ax3d.set_xlabel('$x_1$')
@@ -267,7 +275,8 @@ def x_experiment_moons():
             ax3d.scatter(*x_clusters[i].T, t_clusters[i], c=clr[i], label='Cluster ' + str(i + 1))
         return fig, ax3d
     
-    x_e_all, T_gen, D_all, E_T  = model.predict_recon(x_train)
+    x_e_all, T_gen, D_all  = model.predict_recon(x_train)
+    E_T = model.predict_exp_time(x_train)
     
     fig, ax3d = draw_train_set_3d('Reconstruction', '$T_{gen}$')
     ax3d.scatter(*x_e_all.T, T_gen, c='k', label='Reconstructions')
@@ -282,37 +291,35 @@ def x_experiment_moons():
         [moon(0.3, *cls_params[1]), 0.3]
     ]) - mean) / std
 
-    x_explain = []
-    T_life = []
-    for i in range(2):
-        x_exp_cur, T_life_cur = model.predict_trajectory(exp_points[None, i, :], 100, t_clusters[i].min(), t_clusters[i].max(), True)
-        x_explain.append(x_exp_cur[0, :])
-        T_life.append(T_life_cur)
+    t_traj = np.linspace(t_train.min(), t_train.max(), 100)
+    t_traj = np.tile(t_traj[None, :], (len(exp_points), 1))
+    x_explain = model.predict_trajectory(exp_points, t_traj, True)
     
     fig, ax3d = draw_train_set_3d('Trajectories', 't')
     
     lab_list = ['A', 'B']
     clr_t = ['teal', 'tomato']
     for i in range(exp_points.shape[0]):
-        ax3d.scatter(*x_explain[i].T, T_life[i], c=clr_t[i], label='Trajectory ' + lab_list[i])
+        ax3d.scatter(*x_explain[i].T, t_traj[i], c=clr_t[i], label='Trajectory ' + lab_list[i])
         
     ax3d.legend()
         
+    markers = ['^', 'X']
     fig, ax = draw_train_set_2d('Trajectories')
     for i in range(2):
-        ax.scatter(*x_explain[i].T, s=40, c=clr_t[i], label='Trajectory ' + lab_list[i])
-        ax.scatter(*exp_points[i].T, s=50, c=clr_t[i], marker='*', label='Point ' + lab_list[i])
+        ax.scatter(*x_explain[i].T, s=10, c=clr_t[i], label='Trajectory ' + lab_list[i])
+        ax.scatter(*exp_points[i].T, s=100, c='k', edgecolors='w', zorder=100, marker=markers[i], label='Point ' + lab_list[i])
     ax.legend()
     
-    fig, ax3d = draw_train_set_3d('Sampling', '$T_{gen}$')
+    # fig, ax3d = draw_train_set_3d('Sampling', '$T_{gen}$')
     
-    x_smp, T_smp, D_smp = model.sample_data(300)
+    # x_smp, T_smp, D_smp = model.sample_data(300)
     
-    ax3d.scatter(*x_smp.T, T_smp, c='k', label='Sampled points')
-    ax3d.legend()
-    fig, ax = draw_train_set_2d('Sampling')
-    ax.scatter(*x_smp.T, s=10, c='k', label='Sampled points')
-    ax.legend()
+    # ax3d.scatter(*x_smp.T, T_smp, c='k', label='Sampled points')
+    # ax3d.legend()
+    # fig, ax = draw_train_set_2d('Sampling')
+    # ax.scatter(*x_smp.T, s=10, c='k', label='Sampled points')
+    # ax.legend()
     
     draw_latent_space(model, *x_clusters)
         
@@ -355,7 +362,7 @@ def x_experiment_overlap():
     cls_centers = spiral(np.mean(tau_bounds, axis=-1))
     
     def draw_train_set_3d(name, z_name):
-        fig = plt.figure(dpi=100)
+        fig = plt.figure(dpi=100, figsize=(6, 6))
         fig.suptitle(name)
         ax3d = fig.add_subplot(111, projection='3d')
         ax3d.set_xlabel('$x_1$')
@@ -373,7 +380,8 @@ def x_experiment_overlap():
     date_str = strftime('%m_%d %H_%M_%S', gmtime())
     model.fit(x_train, y, log_dir='TensorBoard/overlap/' + date_str)
     
-    x_e_all, T_gen, D_all, E_T = model.predict_recon(x_train)
+    x_e_all, T_gen, D_all = model.predict_recon(x_train)
+    E_T = model.predict_exp_time(x_train)
     
     fig, ax3d = draw_train_set_3d('Reconstruction', '$T_{gen}$')
     ax3d.scatter(*x_e_all.T, T_gen, c='k', label='Reconstruction')
@@ -382,10 +390,10 @@ def x_experiment_overlap():
     ax3d.scatter(*x_e_all.T, E_T, c='k', label='Reconstruction')
     ax3d.legend()
     
-    x_smp, T_smp, D_smp = model.sample_data(300)
-    fig, ax3d = draw_train_set_3d('Sampling', '$T_{gen}$')
-    ax3d.scatter(*x_smp.T, T_smp, c='k', label='Sampled points')
-    ax3d.legend()
+    # x_smp, T_smp, D_smp = model.sample_data(300)
+    # fig, ax3d = draw_train_set_3d('Sampling', '$T_{gen}$')
+    # ax3d.scatter(*x_smp.T, T_smp, c='k', label='Sampled points')
+    # ax3d.legend()
     
     draw_latent_space(model, *x_clusters)
     
@@ -421,10 +429,10 @@ def censored_exp():
     D = np.concatenate((np.zeros(cens_num), np.ones(uncens_num)))[idx_shf]
     
     def draw_set_2d(name, censored_x, uncensored_x):
-        fig, ax = plt.subplots(1, 1)
+        fig, ax = plt.subplots(1, 1, figsize=(6, 6))
         fig.suptitle(name)
         ax.scatter(*censored_x.T, c='r', s=0.8, label='Censored points')
-        ax.scatter(*uncensored_x.T, c='b', s=0.8, label='Censored points')
+        ax.scatter(*uncensored_x.T, c='b', s=0.8, label='Uncensored points')
         ax.xaxis.set_zorder(-100)
         ax.yaxis.set_zorder(-100)
         ax.grid(linestyle='--', alpha=0.5)
@@ -435,11 +443,11 @@ def censored_exp():
     
     
     def draw_set_3d(name, z_name, censored_x, censored_t, uncensored_x, uncensored_t):
-        fig = plt.figure()
+        fig = plt.figure(figsize=(6, 6))
         fig.suptitle(name)
         ax3d = fig.add_subplot(111, projection='3d')
         ax3d.scatter(*censored_x.T, censored_t, c='r', label='Censored points')
-        ax3d.scatter(*uncensored_x.T, uncensored_t, c='b', label='Censored points')
+        ax3d.scatter(*uncensored_x.T, uncensored_t, c='b', label='Uncensored points')
         ax3d.set_xlabel('$x_1$')
         ax3d.set_ylabel('$x_2$')
         ax3d.set_zlabel(z_name)
@@ -455,20 +463,20 @@ def censored_exp():
     date_str = strftime('%m_%d %H_%M_%S', gmtime())
     model.fit(x_train, y_train, log_dir='TensorBoard/censor/' + date_str)
     
-    x_recon, t_gen, d_recon, e_t = model.predict_recon(x_train)
+    x_recon, t_gen, d_recon = model.predict_recon(x_train)
+    e_t = model.predict_exp_time(x_train)
     draw_set_2d('Recontruction', x_recon[d_recon == 0], x_recon[d_recon == 1])
     draw_set_3d('Recontruction', '$T_{gen}$', x_recon[d_recon == 0], t_gen[d_recon == 0], x_recon[d_recon == 1], t_gen[d_recon == 1])
     draw_set_3d('Recontruction', '$\\hat{T}$', x_recon[d_recon == 0], e_t[d_recon == 0], x_recon[d_recon == 1], e_t[d_recon == 1])
     
-    X, T, D = model.sample_data(400)
-    draw_set_2d('Sampling', X[D == 0], X[D == 1])
-    draw_set_3d('Sampling', '$T_{gen}$', X[D == 0], T[D == 0], X[D == 1], T[D == 1])
+    # X, T, D = model.sample_data(400)
+    # draw_set_2d('Sampling', X[D == 0], X[D == 1])
+    # draw_set_3d('Sampling', '$T_{gen}$', X[D == 0], T[D == 0], X[D == 1], T[D == 1])
     
     plt.show()
     
     
 def real_ds_test(x, y, name='real ds', cens_clf=None):
-    # y['time'] /= 1000
     def draw_tsne(x_list, name_list=None, clr_list=None):
         X = np.concatenate(x_list, 0)
         z = TSNE().fit_transform(X)
@@ -511,16 +519,16 @@ def real_ds_test(x, y, name='real ds', cens_clf=None):
     model.fit(x, y, log_dir=f'TensorBoard/{name}/{date_str}')
     # model.samples_num = 64
     model.batch_load = 256
-    x_rec, t_gen, d_rec, _ = model.predict_recon(x)
-    x_samples, t_samples, d_samples = model.sample_data(x.shape[0])
+    x_rec, t_gen, d_rec = model.predict_recon(x)
+    # x_samples, t_samples, d_samples = model.sample_data(x.shape[0])
 
     tsne_clr = ['b', 'r']
     _, tsne_ax = draw_tsne((x, x_rec), ('Original data', 'Reconstruction'), tsne_clr)
     tsne_ax.legend()
-    _, tsne_ax = draw_tsne((x, x_samples), ('Original data', 'Sampling'), tsne_clr)
-    tsne_ax.legend()
+    # _, tsne_ax = draw_tsne((x, x_samples), ('Original data', 'Sampling'), tsne_clr)
+    # tsne_ax.legend()
     draw_kaplan(t_gen, d_rec, 'Reconstruction', km_axis, clr='teal')
-    draw_kaplan(t_samples, d_samples, 'Sampling', km_axis, clr='tomato')
+    # draw_kaplan(t_samples, d_samples, 'Sampling', km_axis, clr='tomato')
     km_fig.suptitle(name)
     km_axis.legend()
     km_fig, km_axis = draw_kaplan(y['time'], y['censor'], 'Original data', clr='orange')
@@ -528,7 +536,7 @@ def real_ds_test(x, y, name='real ds', cens_clf=None):
     km_fig.suptitle(name)
     km_axis.legend()
     km_fig, km_axis = draw_kaplan(y['time'], y['censor'], 'Original data', clr='orange')
-    draw_kaplan(t_samples, d_samples, 'Sampling', km_axis, clr='tomato')
+    # draw_kaplan(t_samples, d_samples, 'Sampling', km_axis, clr='tomato')
     km_fig.suptitle(name)
     km_axis.legend()
     
@@ -559,7 +567,7 @@ def real_ds_test(x, y, name='real ds', cens_clf=None):
 def veterans_exp():
     vae_kw['latent_dim'] = 15
     mixup_kw['batch_num'] = 16
-    vae_kw['regular_coef'] = 400
+    vae_kw['regular_coef'] = 40
     mixup_kw['epochs'] = 200
     loader = sksurv_loader()
     real_ds_test(*loader.load_veterans_lung_cancer, 'Veterans')
@@ -571,7 +579,7 @@ def whas500_exp():
     mixup_kw['epochs'] = 250
     mixup_kw['benk_vae_loss_rat'] = 0.9
     loader = sksurv_loader()
-    real_ds_test(*loader.load_whas500, 'WHAS500', CatBoostClassifier(iterations=10000, depth=6,
+    real_ds_test(*loader.load_whas500, 'WHAS500', CatBoostClassifier(iterations=1000, depth=6,
                                                                      loss_function='CrossEntropy',verbose=0))
     
 def gbsg2_exp():
@@ -583,7 +591,7 @@ def gbsg2_exp():
     mixup_kw['gumbel_tau'] = 1
     mixup_kw['c_ind_temp'] = 1
     loader = sksurv_loader()
-    real_ds_test(*loader.load_gbsg2, 'GBSG2', CatBoostClassifier(iterations=10000, depth=6,
+    real_ds_test(*loader.load_gbsg2, 'GBSG2', CatBoostClassifier(iterations=1000, depth=6,
                                                                      loss_function='CrossEntropy',verbose=0))
     
 def aids_exp():
@@ -604,23 +612,26 @@ if __name__=='__main__':
         'vae_kw': vae_kw,
         'samples_num': 48,
         'batch_num': 16,
-        'epochs': 50,
-        'lr_rate': 5e-3,
-        'beran_vae_loss_rat': 0.5,
+        'epochs': 150,
+        'lr_rate': 1e-3,
+        'c_ind_weight': 0.5,
+        'vae_weight': 1.0,
+        'traj_weight': 0.5,
+        'likelihood_weight': 0.00005,
         'c_ind_temp': 1,
         'gumbel_tau': 1.0,
         'train_bg_part': 0.6,
         'batch_load': None,
         'device': 'cuda:0',
     }
-    x_experiment_linear()
+    # x_experiment_linear()
     # x_experiment_spiral()
     # x_experiment_moons()
     # x_experiment_curves()
     # x_experiment_overlap()
     # censored_exp()
     
-    # veterans_exp()
+    veterans_exp()
     # whas500_exp()
     # gbsg2_exp()
     # aids_exp()

@@ -42,6 +42,13 @@ class Beran(torch.nn.Module):
 
         filtered_xi = delta_in * xi
         hazards = torch.cumsum(filtered_xi, dim=1)
-        surv_func = torch.exp(-hazards) 
+        surv_func = torch.exp(-hazards)
         surv_steps = surv_func[:, :-1] - surv_func[:, 1:]
+        first_step = 1 - surv_func[:, 0]
+        surv_steps = torch.concat((first_step[:, None], surv_steps), dim=-1)
+        sum = torch.sum(surv_steps, dim=-1, keepdim=True).broadcast_to(surv_steps.shape).clone()
+        bad_idx = sum < 1e-13
+        sum[bad_idx] = 1
+        surv_steps = surv_steps / sum
+        surv_steps[bad_idx] = 0
         return surv_func, surv_steps
