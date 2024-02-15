@@ -115,16 +115,22 @@ class SurvivalMixup(torch.nn.Module):
         self.gumbel_tau = gumbel_tau
         self.T_std = 1
         self.km_times = None
+        self.km_hist = None
         self.km_proba = None
         
     def _init_km(self, t: np.ndarray, d: np.ndarray):
         t_km, sf_km = kaplan_meier_estimator(d, t)
         self.km_times = t_km
-        self.km_proba = np.empty_like(sf_km)
-        self.km_proba[:-1] = sf_km[:-1] - sf_km[1:]
-        self.km_proba[-1] = sf_km[-1]
+        self.km_hist = np.empty_like(sf_km)
+        self.km_hist[1:] = sf_km[:-1] - sf_km[1:]
+        self.km_hist[0] = 1 - sf_km[1]
+        diff = np.empty_like(self.km_times)
+        diff[:-1] = self.km_times[1:] - self.km_times[:-1]
+        diff[-1] = diff[-2]
+        self.km_proba = self.km_hist / diff
         
         self.km_times = self.np2torch(self.km_times)
+        self.km_hist = self.np2torch(self.km_hist)
         self.km_proba = self.np2torch(self.km_proba)
         
     def _lazy_init(self, x: np.ndarray, y: np.recarray):
@@ -221,14 +227,41 @@ class SurvivalMixup(torch.nn.Module):
         return c_ind
     
     def calc_likelihood(self, x: torch.Tensor, t: torch.Tensor):
+        self.beran.kernel.bandwidth.requires_grad = False
+        # self.smoother.bandwidth.requires_grad = False
         mu, sigma = self.vae.get_mu_sigma(x)
-        xi_z = self.calc_prototype(mu, sigma, t) # (batch, points_n, z_dim)
-        _, proba = self.beran(*self._prepare_bg_data(xi_z.shape[0]), xi_z)
+                
+        batch_len, dim = mu.shape
+        z_i_n = self.samples_num
+        z_i = self.vae.gen_samples(mu, sigma, z_i_n).reshape(-1, dim) # (batch * z_i_n, dim)
+        mu_expanded = mu[:, None, :].expand(-1, z_i_n, -1).reshape(z_i.shape) # (batch * z_i_n, dim)
+        sigma_expanded = sigma[:, None, :].expand(-1, z_i_n, -1).reshape(z_i.shape) # (batch * z_i_n, dim)
+        pi_z = self.calc_pdf(z_i, mu_expanded, sigma_expanded) # (batch * z_i_n)
+        
+        mu_bg, delta_bg = self._prepare_bg_data(z_i.shape[0])
+        _, surv_steps = self.beran(mu_bg.detach(), delta_bg.detach(), z_i) # (batch * z_i_n, t_n)
+        pi_t_z = self.surv_steps_to_proba(surv_steps) # (batch * z_i_n, t_n)
+        bg_times = self.T_bg
+        pi_t_z = self.smoother(pi_t_z, bg_times, t, self.samples_num) # (batch, z_i_n, p_n) or (batch, z_i_n)
+        pi_z = torch.reshape(pi_z, (batch_len, self.samples_num)) # (batch, z_i_n)
+        z_i = torch.reshape(z_i, (batch_len, self.samples_num, dim))
+        weights = self.calc_xi_weights(pi_t_z, pi_z) # same as input, weighted within 1'st dim
+        xi_z = torch.sum(weights[..., None] * z_i, dim=1) # (batch, z_dim) or (batch, p_n, z_dim)
+        
+        mu_bg, delta_bg = self._prepare_bg_data(xi_z.shape[0])
+        _, proba = self.beran(mu_bg.detach(), delta_bg.detach(), xi_z)
         step_idx = torch.searchsorted(self.T_bg, t).clamp_max_(proba.shape[1] - 1)
         steps = torch.take_along_dim(proba, step_idx[:, None], dim=1)
         steps[steps < 1e-13] = 1
         logs = torch.log(steps)
-        return torch.sum(logs)
+        self.beran.kernel.bandwidth.requires_grad = True
+        # self.smoother.bandwidth.requires_grad = True
+        # return torch.mean(logs)
+        
+        km_step_idx = torch.searchsorted(self.km_times, t).clamp_max_(self.km_proba.shape[0] - 1)
+        km_proba = torch.take_along_dim(self.km_proba, km_step_idx, 0)
+        metric_weights = torch.nn.functional.softmin(km_proba, 0)
+        return torch.sum(metric_weights * logs[:, 0])
         
         
     def fit(self, x: np.ndarray, y: np.recarray, 
@@ -298,7 +331,6 @@ class SurvivalMixup(torch.nn.Module):
                 
                 for x_t_b, t_t_b, d_t_b in target_loader:
                     x_t_b, t_t_b, d_t_b = x_t_b.to(self.device), t_t_b.to(self.device), d_t_b.to(self.device)
-                
                     x_est, E_T, T_gen, z = self(x_t_b)
 
                     benk_loss += self.beran_loss(t_t_b, d_t_b, E_T, self.c_ind_temp)
@@ -459,7 +491,7 @@ class SurvivalMixup(torch.nn.Module):
         proba = proba / t_diff_corr
         mask = mask.broadcast_to(proba.shape)
         proba[mask] = 0
-        assert not torch.any(torch.isnan(proba))
+        # assert not torch.any(torch.isnan(proba))
         return proba
     
     # calculate the survival function and histogram based on it
@@ -497,7 +529,7 @@ class SurvivalMixup(torch.nn.Module):
         _, surv_steps = self.beran(*self._prepare_bg_data(z_i.shape[0]), z_i) # (batch * z_i_n, t_n)
         pi_t_z = self.surv_steps_to_proba(surv_steps) # (batch * z_i_n, t_n)
         # assert not torch.any(torch.isnan(pi_t_z))
-        bg_times = self.T_bg + self.T_diff_prob / 2
+        bg_times = self.T_bg
         pi_t_z = self.smoother(pi_t_z, bg_times, t, self.samples_num) # (batch, z_i_n, p_n) or (batch, z_i_n)
         # assert not torch.any(torch.isnan(pi_t_z))
         if f_trajectory:
@@ -529,7 +561,7 @@ class SurvivalMixup(torch.nn.Module):
         xi_z, z_i = self.calc_prototype(mu, sigma, T_gen, f_return_z_i=True)
         T_feat = ((T_gen - self.T_mean) / self.T_std)[:, None]
         x_est = self.vae.decoder(torch.concat((xi_z, T_feat), dim=-1))
-        assert not torch.any(torch.isnan(x_est))
+        # assert not torch.any(torch.isnan(x_est))
         return x_est, E_T, T_gen, z_i
     
     def forward_trajectory(self, x: torch.Tensor, t: torch.Tensor, f_single_samples_set=True):
@@ -602,7 +634,7 @@ class SurvivalMixup(torch.nn.Module):
             return E_T.cpu().numpy()
         
     def generate_apriori_t(self, num: int) -> torch.Tensor:
-        steps = self.km_proba[None, :].expand(num, -1)
+        steps = self.km_hist[None, :].expand(num, -1)
         T = self.gen_evt_time(steps, self.km_times)
         return T
         

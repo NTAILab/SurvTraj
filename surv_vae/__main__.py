@@ -8,7 +8,7 @@ from sksurv.ensemble import RandomSurvivalForest
 import numpy as np
 import matplotlib.pyplot as plt
 from time import gmtime, strftime
-from .utility import get_str_array, sksurv_loader, get_traject_plot
+from .utility import get_str_array, sksurv_loader, get_traject_plot, get_traj_plot_ci
 
 
 from sklearn.manifold import TSNE
@@ -128,7 +128,7 @@ def x_experiment_linear():
     x_ec, T, D = model.predict_recon(exp_points_2d)
     E_T = model.predict_exp_time(exp_points_2d)
     print(E_T)
-    fig, ax = draw_train_set_2d('Reconstruction')
+    fig, ax = draw_train_set_2d('Generation')
     ax.scatter(*exp_points_2d.T, c='k', marker='*', s=50, label='Test points')
     ax.scatter(*x_ec.T, c='m', marker='^', s=50, label='Sampled points')
     ax.legend()
@@ -145,16 +145,16 @@ def x_experiment_linear():
     x_e_all, T_gen, D_all  = model.predict_recon(x_train)
     E_T = model.predict_exp_time(x_train)
     
-    fig, ax3d = draw_train_set_3d('Reconstruction', '$T_{gen}$')
-    ax3d.scatter(*x_e_all.T, T_gen, c='k', label='Reconstructions')
+    fig, ax3d = draw_train_set_3d('Generation', '$T_{gen}$')
+    ax3d.scatter(*x_e_all.T, T_gen, c='k', label='Sampled points')
     ax3d.legend()
     
-    fig, ax3d = draw_train_set_3d('Reconstruction', '$\\hat{T}$')
-    ax3d.scatter(*x_e_all.T, E_T, c='k', label='Reconstructions')
+    fig, ax3d = draw_train_set_3d('Generation', '$\\hat{T}$')
+    ax3d.scatter(*x_e_all.T, E_T, c='k', label='Sampled points')
     ax3d.legend()
     
-    fig, ax = draw_train_set_2d('Reconstruction')
-    ax.scatter(*x_e_all.T, c='k', s=1, label='Reconstructions')
+    fig, ax = draw_train_set_2d('Generation')
+    ax.scatter(*x_e_all.T, c='k', s=1, label='Sampled points')
     ax.legend()
 
     t_traj = np.linspace(t_train.min(), t_train.max(), 100)
@@ -190,7 +190,7 @@ def x_experiment_linear():
     
     draw_latent_space(model, *x_clusters)
     
-    get_traject_plot(x_explain[0], t_traj[0])
+    get_traj_plot_ci(model, exp_points[0], np.linspace(t_train.min(), t_train.max(), 20))
     
     plt.show()
     
@@ -199,8 +199,8 @@ def x_experiment_moons():
     n_per_cls = 100
     noise_lvl = 0.01
     y_bounds = [
-        (0, 1),
-        (0.2, 0.8)
+        (-0.2, 1.2),
+        (0.0, 1.0)
     ]
     
     cls_params = [
@@ -209,8 +209,8 @@ def x_experiment_moons():
     ]
     
     responses = [
-        lambda X: (X[:, 0] + 3) * 6  + np.random.normal(0, 0.5, X.shape[0]),
-        lambda X: (-X[:, 0] + 6) * 4 + np.random.normal(0, 0.5, X.shape[0]),
+        lambda X: (X[:, 0] + 3) * 3  + np.random.normal(0, 0.1, X.shape[0]) + 3,
+        lambda X: (-X[:, 0] + 6) * 2 + np.random.normal(0, 0.1, X.shape[0]) + 3,
     ]
     
     x_train_list = []
@@ -278,21 +278,22 @@ def x_experiment_moons():
     x_e_all, T_gen, D_all  = model.predict_recon(x_train)
     E_T = model.predict_exp_time(x_train)
     
-    fig, ax3d = draw_train_set_3d('Reconstruction', '$T_{gen}$')
-    ax3d.scatter(*x_e_all.T, T_gen, c='k', label='Reconstructions')
+    fig, ax3d = draw_train_set_3d('Generation', '$T_{gen}$')
+    ax3d.scatter(*x_e_all.T, T_gen, c='k', label='Sampled points')
     ax3d.legend()
     
-    fig, ax3d = draw_train_set_3d('Reconstruction', '$\\hat{T}$')
-    ax3d.scatter(*x_e_all.T, E_T, c='k', label='Reconstructions')
+    fig, ax3d = draw_train_set_3d('Generation', '$\\hat{T}$')
+    ax3d.scatter(*x_e_all.T, E_T, c='k', label='Sampled points')
     ax3d.legend()
     
     exp_points = (np.asarray([
         [moon(0.8, *cls_params[0]), 0.8],
-        [moon(0.3, *cls_params[1]), 0.3]
+        [moon(0.25, *cls_params[1]), 0.25]
     ]) - mean) / std
 
-    t_traj = np.linspace(t_train.min(), t_train.max(), 100)
-    t_traj = np.tile(t_traj[None, :], (len(exp_points), 1))
+    t_traj = np.empty((len(exp_points), 50))
+    for i in range(len(t_clusters)):
+        t_traj[i] = np.linspace(t_clusters[i].min(), t_clusters[i].max(), t_traj.shape[1])
     x_explain = model.predict_trajectory(exp_points, t_traj, True)
     
     fig, ax3d = draw_train_set_3d('Trajectories', 't')
@@ -322,6 +323,8 @@ def x_experiment_moons():
     # ax.legend()
     
     draw_latent_space(model, *x_clusters)
+    
+    get_traj_plot_ci(model, exp_points[0], np.linspace(t_clusters[0].min(), t_clusters[0].max(), 20))
         
     plt.show()
     
@@ -476,7 +479,10 @@ def censored_exp():
     plt.show()
     
     
-def real_ds_test(x, y, name='real ds', cens_clf=None):
+def real_ds_test(loader_name, name='real ds', cens_clf=None):
+    loader = sksurv_loader()
+    x, y = getattr(loader, loader_name)
+    feat_names, cat_names = loader.get_cat_info(loader_name)
     def draw_tsne(x_list, name_list=None, clr_list=None):
         X = np.concatenate(x_list, 0)
         z = TSNE().fit_transform(X)
@@ -531,67 +537,71 @@ def real_ds_test(x, y, name='real ds', cens_clf=None):
     # draw_kaplan(t_samples, d_samples, 'Sampling', km_axis, clr='tomato')
     km_fig.suptitle(name)
     km_axis.legend()
-    km_fig, km_axis = draw_kaplan(y['time'], y['censor'], 'Original data', clr='orange')
-    draw_kaplan(t_gen, d_rec, 'Reconstruction', km_axis, clr='teal')
-    km_fig.suptitle(name)
-    km_axis.legend()
-    km_fig, km_axis = draw_kaplan(y['time'], y['censor'], 'Original data', clr='orange')
+    # km_fig, km_axis = draw_kaplan(y['time'], y['censor'], 'Original data', clr='orange')
+    # draw_kaplan(t_gen, d_rec, 'Reconstruction', km_axis, clr='teal')
+    # km_fig.suptitle(name)
+    # km_axis.legend()
+    # km_fig, km_axis = draw_kaplan(y['time'], y['censor'], 'Original data', clr='orange')
     # draw_kaplan(t_samples, d_samples, 'Sampling', km_axis, clr='tomato')
-    km_fig.suptitle(name)
-    km_axis.legend()
+    # km_fig.suptitle(name)
+    # km_axis.legend()
     
     c_ind_model = model.score(x, y)
     
-    rf = RandomSurvivalForest().fit(x, y)
-    c_ind_rf = rf.score(x, y)
-    y_sim = get_str_array(t_gen, d_rec)
-    c_ind_simul = rf.score(x_rec, y_sim)
-    rf = RandomSurvivalForest().fit(x_rec, y_sim)
-    c_ind_full_sim = rf.score(x_rec, y_sim)
-    x_enl = np.concatenate((x, x_rec), axis=0)
-    t_enl = np.concatenate((t_gen, y['time']))
-    d_enl = np.concatenate((d_rec, y['censor']))
-    y_enl = get_str_array(t_enl, d_enl)
-    rf = RandomSurvivalForest().fit(x_enl, y_enl)
-    c_ind_enl = rf.score(x, y)
+    # rf = RandomSurvivalForest().fit(x, y)
+    # c_ind_rf = rf.score(x, y)
+    # y_sim = get_str_array(t_gen, d_rec)
+    # c_ind_simul = rf.score(x_rec, y_sim)
+    # rf = RandomSurvivalForest().fit(x_rec, y_sim)
+    # c_ind_full_sim = rf.score(x_rec, y_sim)
+    # x_enl = np.concatenate((x, x_rec), axis=0)
+    # t_enl = np.concatenate((t_gen, y['time']))
+    # d_enl = np.concatenate((d_rec, y['censor']))
+    # y_enl = get_str_array(t_enl, d_enl)
+    # rf = RandomSurvivalForest().fit(x_enl, y_enl)
+    # c_ind_enl = rf.score(x, y)
     
-    print('Cens clf roc-auc:', roc_auc_score(y['censor'], d_rec))
+    # print('Cens clf roc-auc:', roc_auc_score(y['censor'], d_rec))
     print('Model c_ind:', c_ind_model)
-    print('RF c_ind (orig ds):', c_ind_rf)
-    print('RF c_ind (orig ds -> simulated data):', c_ind_simul)
-    print('RF c_ind (simulated data -> simulated data)', c_ind_full_sim)
-    print('RF c_ind (orig ds + simulated data -> orig ds)', c_ind_enl)
+    # print('RF c_ind (orig ds):', c_ind_rf)
+    # print('RF c_ind (orig ds -> simulated data):', c_ind_simul)
+    # print('RF c_ind (simulated data -> simulated data)', c_ind_full_sim)
+    # print('RF c_ind (orig ds + simulated data -> orig ds)', c_ind_enl)
+    
+    T = y['time']#[y['censor'] == 1]
+    T_range = T.max() - T.min()
+    # t_idx = np.argwhere(np.abs(T - T_range / 2) < T_range / 6).ravel()
+    chosen_idx = np.random.choice(np.arange(len(T)), size=10, replace=False)
+    for idx in chosen_idx:
+        
+        t_traj = np.linspace(max(T[idx] - T_range / 6, T.min()), min(T[idx] + T_range / 6, T.max()), 20)
+        # x_cur = x[y['censor'] == 1][idx]
+        x_cur = x[idx]
+        print(x_cur)
+        get_traj_plot_ci(model, x_cur, t_traj, labels=feat_names, cat_names=cat_names)
+    
     plt.show()
 
 
 def veterans_exp():
-    vae_kw['latent_dim'] = 15
+    vae_kw['latent_dim'] = 14
     mixup_kw['batch_num'] = 16
     vae_kw['regular_coef'] = 40
     mixup_kw['epochs'] = 200
-    loader = sksurv_loader()
-    real_ds_test(*loader.load_veterans_lung_cancer, 'Veterans')
+    real_ds_test('load_veterans_lung_cancer', 'Veterans')
     
 def whas500_exp():
-    vae_kw['latent_dim'] = 16
+    vae_kw['latent_dim'] = 18
     mixup_kw['batch_num'] = 16
-    vae_kw['regular_coef'] = 25
-    mixup_kw['epochs'] = 250
-    mixup_kw['benk_vae_loss_rat'] = 0.9
-    loader = sksurv_loader()
-    real_ds_test(*loader.load_whas500, 'WHAS500', CatBoostClassifier(iterations=1000, depth=6,
+    mixup_kw['epochs'] = 100
+    real_ds_test('load_whas500', 'WHAS500', CatBoostClassifier(iterations=1000, depth=6,
                                                                      loss_function='CrossEntropy',verbose=0))
     
 def gbsg2_exp():
-    vae_kw['latent_dim'] = 12
-    mixup_kw['batch_num'] = 20
-    mixup_kw['epochs'] = 300
-    vae_kw['regular_coef'] = 40
-    mixup_kw['benk_vae_loss_rat'] = 0.9
-    mixup_kw['gumbel_tau'] = 1
-    mixup_kw['c_ind_temp'] = 1
-    loader = sksurv_loader()
-    real_ds_test(*loader.load_gbsg2, 'GBSG2', CatBoostClassifier(iterations=1000, depth=6,
+    vae_kw['latent_dim'] = 14
+    mixup_kw['batch_num'] = 16
+    mixup_kw['epochs'] = 250
+    real_ds_test('load_gbsg2', 'GBSG2', CatBoostClassifier(iterations=1000, depth=6,
                                                                      loss_function='CrossEntropy',verbose=0))
     
 def aids_exp():
@@ -599,13 +609,12 @@ def aids_exp():
     mixup_kw['batch_num'] = 10
     mixup_kw['epochs'] = 100
     mixup_kw['benk_vae_loss_rat'] = 0.7
-    loader = sksurv_loader()
-    real_ds_test(*loader.load_aids, 'AIDS')
+    real_ds_test('load_aids', 'AIDS')
     
 if __name__=='__main__':
     vae_kw = {
         'latent_dim': 8,
-        'regular_coef': 60,
+        'regular_coef': 40,
         'sigma_z': 1
     }
     mixup_kw = {
@@ -613,11 +622,11 @@ if __name__=='__main__':
         'samples_num': 48,
         'batch_num': 16,
         'epochs': 150,
-        'lr_rate': 1e-3,
+        'lr_rate': 3e-3,
         'c_ind_weight': 0.5,
         'vae_weight': 1.0,
-        'traj_weight': 0.5,
-        'likelihood_weight': 0.00005,
+        'traj_weight': 1.5,
+        'likelihood_weight': 0.1,
         'c_ind_temp': 1,
         'gumbel_tau': 1.0,
         'train_bg_part': 0.6,
@@ -631,7 +640,7 @@ if __name__=='__main__':
     # x_experiment_overlap()
     # censored_exp()
     
-    veterans_exp()
-    # whas500_exp()
+    # veterans_exp()
+    whas500_exp()
     # gbsg2_exp()
     # aids_exp()
