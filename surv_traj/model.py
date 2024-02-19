@@ -66,7 +66,7 @@ def c_ind_loss(T_true, D, T_calc, sigma_temp):
     C = torch.sum(T_mask * sigma * D[:, None]) / torch.sum(T_mask * D[:, None])
     return C
 
-class SurvivalMixup(torch.nn.Module):
+class SurvTraj(torch.nn.Module):
     
     def __init__(self, vae_kw: Dict,
                  samples_num: int,
@@ -266,7 +266,7 @@ class SurvivalMixup(torch.nn.Module):
         
     def fit(self, x: np.ndarray, y: np.recarray, 
             val_set: Optional[Tuple[np.ndarray, np.recarray]]=None,
-            log_dir:Optional[str]=None) -> 'SurvivalMixup':
+            log_dir:Optional[str]=None) -> 'SurvTraj':
         assert x.shape[0] == y.shape[0]
         self._lazy_init(x, y)
         optimizer = self._get_optimizer()

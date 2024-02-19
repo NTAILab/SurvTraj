@@ -1,6 +1,6 @@
 import numpy as np
 from abc import ABC, abstractstaticmethod
-from surv_vae.utility import TYPE, sksurv_loader
+from surv_traj.utility import TYPE, sksurv_loader
 from typing import Optional, Tuple, Dict
 from sklearn.model_selection import train_test_split
 

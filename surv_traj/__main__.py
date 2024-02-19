@@ -1,4 +1,4 @@
-from .surv_mixup import SurvivalMixup
+from .model import SurvTraj
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sksurv.nonparametric import kaplan_meier_estimator
 from sksurv.metrics import concordance_index_censored
@@ -93,7 +93,7 @@ def x_experiment_linear():
     t_train = np.concatenate((t_train, np.repeat(times, n_per_cls)), 0)
     y = get_str_array(t_train, d_train)
     
-    model = SurvivalMixup(**mixup_kw)
+    model = SurvTraj(**mixup_kw)
     date_str = strftime('%m_%d %H_%M_%S', gmtime())
     model.fit(x_train, y, log_dir='TensorBoard/linear/' + date_str)
     
@@ -245,7 +245,7 @@ def x_experiment_moons():
     #     ]
     # ) - mean) / std
     
-    model = SurvivalMixup(**mixup_kw)
+    model = SurvTraj(**mixup_kw)
     date_str = strftime('%m_%d %H_%M_%S', gmtime())
     model.fit(x_train, y, log_dir='TensorBoard/moons/' + date_str)
     t = np.linspace(np.min(t_train), np.max(t_train), 100)
@@ -378,7 +378,7 @@ def x_experiment_overlap():
     ax.legend()
     
     
-    model = SurvivalMixup(**mixup_kw)
+    model = SurvTraj(**mixup_kw)
     date_str = strftime('%m_%d %H_%M_%S', gmtime())
     model.fit(x_train, y, log_dir='TensorBoard/overlap/' + date_str)
     
@@ -461,7 +461,7 @@ def censored_exp():
     
     x_train = X
     y_train = get_str_array(Y, D)
-    model = SurvivalMixup(cens_clf_model=RandomForestClassifier(n_estimators=100), **mixup_kw)
+    model = SurvTraj(cens_clf_model=RandomForestClassifier(n_estimators=100), **mixup_kw)
     date_str = strftime('%m_%d %H_%M_%S', gmtime())
     model.fit(x_train, y_train, log_dir='TensorBoard/censor/' + date_str)
     
@@ -545,7 +545,7 @@ def real_ds_test(loader_name, name='real ds', cens_clf=None):
     km_fig, km_axis = draw_kaplan(y['time'], y['censor'], 'Data', clr='orange')
     
     
-    model = SurvivalMixup(cens_clf_model=RandomForestClassifier() if cens_clf is None else cens_clf, **mixup_kw)
+    model = SurvTraj(cens_clf_model=RandomForestClassifier() if cens_clf is None else cens_clf, **mixup_kw)
     date_str = strftime('%m_%d %H_%M_%S', gmtime())
     model.fit(x, y, log_dir=f'TensorBoard/{name}/{date_str}')
     # model.samples_num = 64

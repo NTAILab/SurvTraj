@@ -3,11 +3,11 @@ from time import gmtime, strftime, time
 import numpy as np
 from datasets import Dataset, get_ds_map, Veterans, GBSG2, WHAS500
 from sklearn.ensemble import RandomForestClassifier
-from models import ModelWrapper, SurvMixupWrapper
+from models import ModelWrapper, SurvTrajWrapper
 from typing import Optional, Dict, Type
 from collections import defaultdict
 from inspect import isabstract
-from surv_vae.utility import get_all_subclasses
+from surv_traj.utility import get_all_subclasses
 import json
 
 class Experiment():
@@ -33,7 +33,7 @@ class Experiment():
         params = dict()
         models_dict = self.get_models()
         for model_name, model_cls in models_dict.items():
-            if model_cls is SurvMixupWrapper:
+            if model_cls is SurvTrajWrapper:
                 params[model_name] = lambda : {
                     'samples_num': 48,
                     'latent_dim': 16, 

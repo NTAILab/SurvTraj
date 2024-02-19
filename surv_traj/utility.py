@@ -6,7 +6,7 @@ import torch
 from matplotlib.figure import Figure
 from matplotlib.axes import Axes
 import matplotlib.pyplot as plt
-from .surv_mixup import SurvivalMixup
+from .model import SurvTraj
 from pandas.api.types import is_categorical_dtype
 
 TYPE = [('censor', '?'), ('time', 'f8')]
@@ -83,7 +83,7 @@ def get_traject_plot(x: np.ndarray, t: np.ndarray,
     ax.set_ylabel('x')
     return fig, ax
 
-def get_traj_plot_ci(model: SurvivalMixup, x: np.ndarray, t: np.ndarray, 
+def get_traj_plot_ci(model: SurvTraj, x: np.ndarray, t: np.ndarray, 
                       traj_num: int = 100, conf_p: float = 0.25,
                       labels: Optional[List[str]] = None,
                       cat_names: Optional[Dict[str, List[str]]] = None,
@@ -105,15 +105,16 @@ def get_traj_plot_ci(model: SurvivalMixup, x: np.ndarray, t: np.ndarray,
                              figsize=(6, 2 * cont_n), 
                              layout='tight')
     fig.suptitle('Continuous features')
-    fig, cat_axes = plt.subplots(cat_n, 1, dpi=100,
-                             figsize=(6, 2 * cat_n), 
-                             layout='tight')
-    fig.suptitle('Categorical features')
+    if cat_n > 0:
+        fig, cat_axes = plt.subplots(cat_n, 1, dpi=100,
+                                figsize=(6, 2 * cat_n), 
+                                layout='tight')
+        fig.suptitle('Categorical features')
     i_cont = 0
     i_cat = 0
     for i in range(x.shape[0]):
         lbl = f'$x_{{{i + 1}}}$' if labels is None else labels[i]
-        if cat_names is not None and lbl in cat_names:
+        if cat_n > 0 and lbl in cat_names:
             axes = cat_axes
             j = i_cat
             axes[j].set_yticks(np.arange(len(cat_names[lbl])), cat_names[lbl])

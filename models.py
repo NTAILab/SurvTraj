@@ -2,13 +2,13 @@ from sksurv.ensemble import RandomSurvivalForest
 from sksurv.linear_model import CoxnetSurvivalAnalysis
 from sksurv.metrics import concordance_index_censored
 from numpy.random import RandomState
-from surv_vae.surv_mixup import SurvivalMixup
+from surv_traj.model import SurvTraj
 from sklearn.model_selection import RandomizedSearchCV, StratifiedKFold
 from typing import Any, Iterator, Optional
 from abc import ABC, abstractmethod, abstractstaticmethod
 from datasets import Dataset
 import numpy as np
-from surv_vae.utility import TYPE
+from surv_traj.utility import TYPE
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics.pairwise import rbf_kernel
 from numba import njit
@@ -31,7 +31,7 @@ class ModelWrapper(ABC):
     def score(self, ds: Dataset) -> float:
         pass
     
-class SurvMixupWrapper(ModelWrapper):
+class SurvTrajWrapper(ModelWrapper):
     def __init__(self, samples_num: int,
                  latent_dim: int, 
                  regular_coef: float, 
@@ -39,13 +39,18 @@ class SurvMixupWrapper(ModelWrapper):
                  batch_num: int = 20,
                  epochs: int = 100,
                  lr_rate: float = 0.001,
-                 benk_vae_loss_rat: float = 0.2,
+                 c_ind_weight: float = 1.0,
+                 vae_weight: float = 1.0,
+                 traj_weight: float = 1.0,
+                 likelihood_weight: float = 1.0,
                  c_ind_temp: float = 1.0,
                  gumbel_tau: float = 1.0,
                  train_bg_part: float = 0.6,
+                 traj_penalty_points: int = 10,
                  cens_cls_model = None,
                  batch_load: Optional[int] = 256,
-                 patience: int = 10):
+                 patience: int = 10,
+                 device: str = 'cpu'):
         vae_kw = {
             'latent_dim': latent_dim,
             'regular_coef': regular_coef,
@@ -53,10 +58,11 @@ class SurvMixupWrapper(ModelWrapper):
         }
         if cens_cls_model is None:
             cens_cls_model = RandomForestClassifier()
-        self.model = SurvivalMixup(vae_kw, samples_num, batch_num,
-                                   epochs, lr_rate, benk_vae_loss_rat,
-                                   c_ind_temp, gumbel_tau, train_bg_part,
-                                   cens_cls_model, batch_load, patience)
+        self.model = SurvTraj(vae_kw, samples_num, batch_num,
+                                   epochs, lr_rate, c_ind_weight,
+                                   vae_weight, traj_weight, likelihood_weight,
+                                   c_ind_temp, gumbel_tau, train_bg_part, traj_penalty_points,
+                                   cens_cls_model, batch_load, patience, device)
         super().__init__()
     
     def fit(self, ds: Dataset):
