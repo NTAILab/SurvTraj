@@ -29,18 +29,25 @@ class sksurv_loader():
         X = categorical_to_numeric(X)
         return X.to_numpy(), y.astype(TYPE)
 
-    def get_cat_info(self, ds_name):
+    def get_feat_info(self, ds_name):
         X, y = getattr(ds, ds_name)()
         
         is_cat = lambda series: is_categorical_dtype(series.dtype) or series.dtype == "O"
         
         feat_names = []
-        cat_set = set()
+        cat_dict = dict()
+        cont_dict = dict()
         for name, s in X.items():
             feat_names.append(name)
             if is_cat(s):
-                cat_set.add(name)
-        return feat_names, cat_set
+                # cat_set.add(name)
+                cat_dict[name] = list(s.dtype.categories)
+            else:
+                cont_dict[name] = {
+                    'mean': X[name].mean(),
+                    'std': X[name].std(),
+                }
+        return feat_names, cont_dict, cat_dict
         
 # separate arrays to the structured one
 # first field - censoring flag (bool)
@@ -79,37 +86,50 @@ def get_traject_plot(x: np.ndarray, t: np.ndarray,
 def get_traj_plot_ci(model: SurvivalMixup, x: np.ndarray, t: np.ndarray, 
                       traj_num: int = 100, conf_p: float = 0.25,
                       labels: Optional[List[str]] = None,
-                      cat_names: Optional[Set[str]] = None) -> Tuple[Figure, List[Axes]]:
+                      cat_names: Optional[Dict[str, List[str]]] = None,
+                      post_processor = None) -> Tuple[Figure, List[Axes]]:
     assert x.ndim == t.ndim == 1
     assert conf_p < 0.5
+    if post_processor is None:
+        post_processor = lambda x: x
+    cat_n = 0 if cat_names is None else len(cat_names)
+    cont_n = x.shape[0] - cat_n
     x_in = np.tile(x[None, :], (traj_num, 1))
     t_in = np.tile(t[None, :], (traj_num, 1))
     x_traj = model.predict_trajectory(x_in, t_in)
+    x_traj = post_processor(x_traj)
     low_quantile = np.quantile(x_traj, conf_p, 0)
     up_quantile = np.quantile(x_traj, 1 - conf_p, 0)
     median = np.median(x_traj, 0)
-    ax_num = 1 if cat_names is None else 2
-    fig, axes = plt.subplots(1, ax_num, dpi=100, figsize=(6 * ax_num, 6))
-    if cat_names is not None:
-        ax_cont, ax_cat = axes
-        ax_cont.set_title('Continuous features')
-        ax_cat.set_title('Categorical features')
-    else:
-        ax_cont = axes
-        axes = [axes]
+    fig, cont_axes = plt.subplots(cont_n, 1, dpi=100,
+                             figsize=(6, 2 * cont_n), 
+                             layout='tight')
+    fig.suptitle('Continuous features')
+    fig, cat_axes = plt.subplots(cat_n, 1, dpi=100,
+                             figsize=(6, 2 * cat_n), 
+                             layout='tight')
+    fig.suptitle('Categorical features')
+    i_cont = 0
+    i_cat = 0
     for i in range(x.shape[0]):
         lbl = f'$x_{{{i + 1}}}$' if labels is None else labels[i]
         if cat_names is not None and lbl in cat_names:
-            ax = ax_cat
+            axes = cat_axes
+            j = i_cat
+            axes[j].set_yticks(np.arange(len(cat_names[lbl])), cat_names[lbl])
+            i_cat += 1
         else:
-            ax = ax_cont
-        ax.fill_between(t, low_quantile[:, i], up_quantile[:, i], alpha=0.25)
-        ax.plot(t, median[:, i], 's--', label=lbl)
-    
-    for ax in axes:
-        ax.grid()
-        ax.legend()
-        ax.set_xlabel('t')
-        ax.set_ylabel('x')
-    return fig, axes
+            axes = cont_axes
+            j = i_cont
+            axes[j].set_ylabel('x')
+            i_cont += 1
+        lq = low_quantile[:, i]
+        uq = up_quantile[:, i]
+        med = median[:, i]
+        axes[j].fill_between(t, lq, uq, alpha=0.25)
+        axes[j].plot(t, med, 's--')
+        axes[j].set_title(lbl)
+        axes[j].set_xlabel('t')
+        axes[j].grid()
+    return fig, cont_axes
     

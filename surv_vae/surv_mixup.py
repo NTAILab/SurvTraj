@@ -334,14 +334,17 @@ class SurvivalMixup(torch.nn.Module):
                     x_est, E_T, T_gen, z = self(x_t_b)
 
                     benk_loss += self.beran_loss(t_t_b, d_t_b, E_T, self.c_ind_temp)
+                    
+                    uncens_mask = d_t_b == 1
+                    x_uncens = x_t_b[uncens_mask]
+                    t_uncens = t_t_b[uncens_mask]
                     t_min = traj_min_time.expand(x_t_b.shape[0])
                     t_max = traj_max_time.expand(x_t_b.shape[0])
                     traj_c_ind_loss += self.calc_beran_traj_loss(x_t_b, t_min, t_max, self.traj_pnl_p_n)
                 
                     cur_vae_loss, cur_x_loss, cur_regularizer = self.vae_loss(x_t_b, z, x_est)
                     
-                    uncens_mask = d_t_b == 1
-                    likelihood += self.calc_likelihood(x_t_b[uncens_mask], t_t_b[uncens_mask])               
+                    likelihood += self.calc_likelihood(x_uncens, t_uncens)               
                     vae_loss += cur_vae_loss
                     x_loss += cur_x_loss
                     regularizer += cur_regularizer
@@ -428,10 +431,10 @@ class SurvivalMixup(torch.nn.Module):
     def fit_cens_model(self, X: torch.Tensor, T: torch.Tensor, d: np.ndarray) -> None:
         with torch.no_grad():
             mu, sigma = self.vae.get_mu_sigma(X)
-            xi_z = self.calc_prototype(mu, sigma, T)
-            xi_z = xi_z.cpu().numpy()
+            # xi_z = self.calc_prototype(mu, sigma, T)
+            # xi_z = xi_z.cpu().numpy()
             t = T.cpu().numpy()
-        train_data = np.concatenate((xi_z, t[:, None]), axis=-1)
+        train_data = np.concatenate((mu.cpu().numpy(), t[:, None]), axis=-1)
         self.cens_model.fit(train_data, d.astype(np.int0))
         
     def _prepare_bg_data(self, batch_num: int) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -576,7 +579,8 @@ class SurvivalMixup(torch.nn.Module):
     def predict_recon(self, x: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         with torch.no_grad():
             x_list = []
-            xi_list = []
+            # xi_list = []
+            mu_list = []
             t_gen_list = []
             X = TensorDataset(self.np2torch(x, device='cpu'))
             batch = x.shape[0] if self.batch_load is None else self.batch_load
@@ -592,14 +596,16 @@ class SurvivalMixup(torch.nn.Module):
                 x_est = self.vae.decoder(torch.concat((xi_z, T_feat), dim=-1))
                 
                 x_list.append(x_est.cpu().numpy())
-                xi_list.append(xi_z.cpu().numpy())
+                # xi_list.append(xi_z.cpu().numpy())
+                mu_list.append(mu.cpu().numpy())
                 t_gen_list.append(T_gen.cpu().numpy())
             X = np.concatenate(x_list, axis=0)
             T_gen = np.concatenate(t_gen_list, axis=0)
-            Xi = np.concatenate(xi_list, axis=0)
+            # Xi = np.concatenate(xi_list, axis=0)
+            Mu = np.concatenate(mu_list, axis=0)
             if self.cens_model is not None:
                 D_proba = self.cens_model.predict_proba(
-                    np.concatenate((Xi, T_gen[:, None]), -1))[:, 1]
+                    np.concatenate((Mu, T_gen[:, None]), -1))[:, 1]
             else:
                 D_proba = self.uncens_part
             D = np.random.binomial(1, D_proba, x.shape[0])

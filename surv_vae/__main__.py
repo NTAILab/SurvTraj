@@ -1,6 +1,5 @@
 from .surv_mixup import SurvivalMixup
-from sklearn.ensemble import RandomForestClassifier
-from catboost import CatBoostClassifier
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sksurv.nonparametric import kaplan_meier_estimator
 from sksurv.metrics import concordance_index_censored
 from sksurv.ensemble import RandomSurvivalForest
@@ -89,7 +88,7 @@ def x_experiment_linear():
         t_clusters.append(cluster_y)
     x_train = np.concatenate(x_train, 0)
     x_train = np.concatenate((x_train, cls_points.reshape(-1, cls_centers.shape[1])), 0)
-    d_train = np.ones(x_train.shape[0])
+    d_train = np.random.binomial(1, 0.8, x_train.shape[0])
     t_train = np.concatenate(t_train, 0)
     t_train = np.concatenate((t_train, np.repeat(times, n_per_cls)), 0)
     y = get_str_array(t_train, d_train)
@@ -154,7 +153,7 @@ def x_experiment_linear():
     ax3d.legend()
     
     fig, ax = draw_train_set_2d('Generation')
-    ax.scatter(*x_e_all.T, c='k', s=1, label='Sampled points')
+    ax.scatter(*x_e_all.T, c='k', s=8, label='Sampled points')
     ax.legend()
 
     t_traj = np.linspace(t_train.min(), t_train.max(), 100)
@@ -196,7 +195,7 @@ def x_experiment_linear():
     
 def x_experiment_moons():
     moon = lambda y, s, mu_x, mu_y: s * (y - mu_y) ** 2 + mu_x
-    n_per_cls = 100
+    n_per_cls = 150
     noise_lvl = 0.01
     y_bounds = [
         (-0.2, 1.2),
@@ -229,7 +228,7 @@ def x_experiment_moons():
     mean = np.mean(x_train, 0, keepdims=True)
     std = np.std(x_train, 0, keepdims=True)
     x_train = (x_train - mean) / std
-    d_train = np.ones(x_train.shape[0])
+    d_train = np.random.binomial(1, 0.8, x_train.shape[0])
     t_train = np.concatenate(t_train_list, 0)
     y = get_str_array(t_train, d_train)
     
@@ -386,11 +385,11 @@ def x_experiment_overlap():
     x_e_all, T_gen, D_all = model.predict_recon(x_train)
     E_T = model.predict_exp_time(x_train)
     
-    fig, ax3d = draw_train_set_3d('Reconstruction', '$T_{gen}$')
-    ax3d.scatter(*x_e_all.T, T_gen, c='k', label='Reconstruction')
+    fig, ax3d = draw_train_set_3d('Generation', '$T_{gen}$')
+    ax3d.scatter(*x_e_all.T, T_gen, c='k', label='Generation')
     ax3d.legend()
-    fig, ax3d = draw_train_set_3d('Reconstruction', '$\\hat{T}$')
-    ax3d.scatter(*x_e_all.T, E_T, c='k', label='Reconstruction')
+    fig, ax3d = draw_train_set_3d('Generation', '$\\hat{T}$')
+    ax3d.scatter(*x_e_all.T, E_T, c='k', label='Generation')
     ax3d.legend()
     
     # x_smp, T_smp, D_smp = model.sample_data(300)
@@ -468,13 +467,27 @@ def censored_exp():
     
     x_recon, t_gen, d_recon = model.predict_recon(x_train)
     e_t = model.predict_exp_time(x_train)
-    draw_set_2d('Recontruction', x_recon[d_recon == 0], x_recon[d_recon == 1])
-    draw_set_3d('Recontruction', '$T_{gen}$', x_recon[d_recon == 0], t_gen[d_recon == 0], x_recon[d_recon == 1], t_gen[d_recon == 1])
-    draw_set_3d('Recontruction', '$\\hat{T}$', x_recon[d_recon == 0], e_t[d_recon == 0], x_recon[d_recon == 1], e_t[d_recon == 1])
+    draw_set_2d('Generation', x_recon[d_recon == 0], x_recon[d_recon == 1])
+    draw_set_3d('Generation', '$T_{gen}$', x_recon[d_recon == 0], t_gen[d_recon == 0], x_recon[d_recon == 1], t_gen[d_recon == 1])
+    draw_set_3d('Generation', '$\\hat{T}$', x_recon[d_recon == 0], e_t[d_recon == 0], x_recon[d_recon == 1], e_t[d_recon == 1])
     
     # X, T, D = model.sample_data(400)
     # draw_set_2d('Sampling', X[D == 0], X[D == 1])
     # draw_set_3d('Sampling', '$T_{gen}$', X[D == 0], T[D == 0], X[D == 1], T[D == 1])
+    
+    exp_angle = angles.mean()
+    exp_point = (1 + dist) * np.asarray((np.cos(exp_angle), np.sin(exp_angle)))[None, :]
+    t_traj = np.linspace(y_outer.min(), y_outer.max(), 50)[None, :]
+    x_explain = model.predict_trajectory(exp_point, t_traj, True)
+    fig, ax = draw_set_2d('Trajectory', inner_circle, outer_circle)
+    ax.scatter(*x_explain.T, s=10, c='tomato', label='Trajectory')
+    ax.scatter(*exp_point.T, s=100, c='k', edgecolors='w', zorder=100, marker='^', label='Explainable point')
+    ax.legend(loc='upper right')
+    fig, ax3d = draw_set_3d('Trajectory', 't', inner_circle, y_inner, outer_circle, y_outer)
+    ax3d.scatter(*x_explain.T, t_traj, c='tomato', label='Trajectory')
+    ax3d.legend()
+    
+    get_traj_plot_ci(model, exp_point[0], np.linspace(y_outer.min(), y_outer.max(), 20))
     
     plt.show()
     
@@ -482,7 +495,7 @@ def censored_exp():
 def real_ds_test(loader_name, name='real ds', cens_clf=None):
     loader = sksurv_loader()
     x, y = getattr(loader, loader_name)
-    feat_names, cat_names = loader.get_cat_info(loader_name)
+    feat_names, cont_dict, cat_names = loader.get_feat_info(loader_name)
     def draw_tsne(x_list, name_list=None, clr_list=None):
         X = np.concatenate(x_list, 0)
         z = TSNE().fit_transform(X)
@@ -515,9 +528,21 @@ def real_ds_test(loader_name, name='real ds', cens_clf=None):
         ax.xaxis.set_zorder(-100)
         ax.yaxis.set_zorder(-100)
         ax.grid(linestyle='--', alpha=0.5)
+        ax.set_xlabel('t')
+        ax.set_ylabel('Survival function')
         return fig, ax
     
-    km_fig, km_axis = draw_kaplan(y['time'], y['censor'], 'Original data', clr='orange')
+    def post_proc(x: np.ndarray):
+        x_processed = np.empty_like(x)
+        for i in range(x.shape[-1]):
+            name = feat_names[i]
+            if name in cont_dict:
+                x_processed[..., i] = x[..., i] * cont_dict[name]['std'] + cont_dict[name]['mean']
+            else:
+                x_processed[..., i] = np.round(x[..., i])
+        return x_processed
+            
+    km_fig, km_axis = draw_kaplan(y['time'], y['censor'], 'Data', clr='orange')
     
     
     model = SurvivalMixup(cens_clf_model=RandomForestClassifier() if cens_clf is None else cens_clf, **mixup_kw)
@@ -529,11 +554,11 @@ def real_ds_test(loader_name, name='real ds', cens_clf=None):
     # x_samples, t_samples, d_samples = model.sample_data(x.shape[0])
 
     tsne_clr = ['b', 'r']
-    _, tsne_ax = draw_tsne((x, x_rec), ('Original data', 'Reconstruction'), tsne_clr)
+    _, tsne_ax = draw_tsne((x, x_rec), ('Original data', 'Generation'), tsne_clr)
     tsne_ax.legend()
     # _, tsne_ax = draw_tsne((x, x_samples), ('Original data', 'Sampling'), tsne_clr)
     # tsne_ax.legend()
-    draw_kaplan(t_gen, d_rec, 'Reconstruction', km_axis, clr='teal')
+    draw_kaplan(t_gen, d_rec, 'Generation', km_axis, clr='teal')
     # draw_kaplan(t_samples, d_samples, 'Sampling', km_axis, clr='tomato')
     km_fig.suptitle(name)
     km_axis.legend()
@@ -572,13 +597,14 @@ def real_ds_test(loader_name, name='real ds', cens_clf=None):
     T_range = T.max() - T.min()
     # t_idx = np.argwhere(np.abs(T - T_range / 2) < T_range / 6).ravel()
     chosen_idx = np.random.choice(np.arange(len(T)), size=10, replace=False)
-    for idx in chosen_idx:
-        
-        t_traj = np.linspace(max(T[idx] - T_range / 6, T.min()), min(T[idx] + T_range / 6, T.max()), 20)
-        # x_cur = x[y['censor'] == 1][idx]
-        x_cur = x[idx]
+    x_chosen = x[chosen_idx]
+    E_T = model.predict_exp_time(x_chosen)
+    for i in range(len(x_chosen)):
+        t_traj = np.linspace(max(E_T[i] - 100, T.min()), min(E_T[i] + 100, T.max()), 20)
+        x_cur = x_chosen[i]
         print(x_cur)
-        get_traj_plot_ci(model, x_cur, t_traj, labels=feat_names, cat_names=cat_names)
+        get_traj_plot_ci(model, x_cur, t_traj, conf_p=0.1, labels=feat_names, 
+                         cat_names=cat_names, post_processor=post_proc)
     
     plt.show()
 
@@ -591,18 +617,16 @@ def veterans_exp():
     real_ds_test('load_veterans_lung_cancer', 'Veterans')
     
 def whas500_exp():
-    vae_kw['latent_dim'] = 18
+    vae_kw['latent_dim'] = 16
     mixup_kw['batch_num'] = 16
-    mixup_kw['epochs'] = 100
-    real_ds_test('load_whas500', 'WHAS500', CatBoostClassifier(iterations=1000, depth=6,
-                                                                     loss_function='CrossEntropy',verbose=0))
+    mixup_kw['epochs'] = 200
+    real_ds_test('load_whas500', 'WHAS500', GradientBoostingClassifier(n_estimators=1000, max_depth=6))
     
 def gbsg2_exp():
     vae_kw['latent_dim'] = 14
     mixup_kw['batch_num'] = 16
     mixup_kw['epochs'] = 250
-    real_ds_test('load_gbsg2', 'GBSG2', CatBoostClassifier(iterations=1000, depth=6,
-                                                                     loss_function='CrossEntropy',verbose=0))
+    real_ds_test('load_gbsg2', 'GBSG2', GradientBoostingClassifier(n_estimators=1000, max_depth=6))
     
 def aids_exp():
     vae_kw['latent_dim'] = 16
@@ -621,10 +645,10 @@ if __name__=='__main__':
         'vae_kw': vae_kw,
         'samples_num': 48,
         'batch_num': 16,
-        'epochs': 150,
-        'lr_rate': 3e-3,
+        'epochs': 100,
+        'lr_rate': 2e-3,
         'c_ind_weight': 0.5,
-        'vae_weight': 1.0,
+        'vae_weight': 0.5,
         'traj_weight': 1.5,
         'likelihood_weight': 0.1,
         'c_ind_temp': 1,
