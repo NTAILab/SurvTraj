@@ -1,0 +1,10 @@
+numpy >= 1.23.2
+numba >= 0.56.4
+scikit-learn == 1.2.2
+scikit-survival == 0.21.0
+torch >= 2.0.1
+tqdm >= 4.64.1
+tensorboard >= 2.10.1
+pandas >= 1.5.0
+matplotlib >= 3.7.1
+seaborn >= 0.12.2

@@ -7,3 +7,4 @@ paper_pictures*
 /backups
 *.json
 *.txt
+!requirements.txt
