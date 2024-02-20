@@ -647,17 +647,17 @@ if __name__=='__main__':
         'batch_num': 16,
         'epochs': 100,
         'lr_rate': 2e-3,
-        'c_ind_weight': 0.5,
-        'vae_weight': 0.5,
-        'traj_weight': 1.5,
-        'likelihood_weight': 0.1,
+        'c_ind_weight': 1.0,
+        'vae_weight': 0.7,
+        'traj_weight': 0.1,
+        'likelihood_weight': 0.5,
         'c_ind_temp': 1,
         'gumbel_tau': 1.0,
         'train_bg_part': 0.6,
         'batch_load': None,
         'device': 'cuda:0',
     }
-    # x_experiment_linear()
+    x_experiment_linear()
     # x_experiment_spiral()
     # x_experiment_moons()
     # x_experiment_curves()
@@ -665,6 +665,6 @@ if __name__=='__main__':
     # censored_exp()
     
     # veterans_exp()
-    whas500_exp()
+    # whas500_exp()
     # gbsg2_exp()
     # aids_exp()

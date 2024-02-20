@@ -1,6 +1,7 @@
 import torch
 from .vae import VAE
 from .beran import Beran
+from .sf_nn import SFNet
 from sksurv.metrics import concordance_index_censored
 from sksurv.nonparametric import kaplan_meier_estimator
 from typing import Dict, Tuple, Optional
@@ -89,7 +90,7 @@ class SurvTraj(torch.nn.Module):
         self.device = torch.device(device)
         self.vae = VAE(device=self.device, **vae_kw)
         self.samples_num = samples_num
-        self.beran = Beran(self.device)
+        self.beran = None #Beran(self.device)
         self.batch_num = batch_num
         self.epochs = epochs
 
@@ -139,18 +140,13 @@ class SurvTraj(torch.nn.Module):
         self.vae.dec_dim = self.vae.latent_dim + 1
         self.vae._lazy_init(x)
         self._init_km(y['time'], y['censor'])
+        self._set_background(y['time'], y['censor'])
+        self.beran = SFNet(self.vae.latent_dim, self.T_bg.shape[0], self.device)
 
-    def _set_background(self, X: torch.Tensor, T: torch.Tensor, D: torch.Tensor):
-        self.T_bg, sort_args = torch.sort(T)
-        self.X_bg = X[sort_args]
-        self.D_bg = D[sort_args]
-        # T_diff is used for the integral computation, SO:
-        # the same time labels will have the same diff metric:
-        # (1, 2, 2, 3) -> (1, 1, 1, 1)
-        t_diff = calc_t_diff_proba(self.T_bg.cpu().numpy())
-        assert np.all(t_diff > 0)
+    def _set_background(self, t: np.ndarray, d: np.ndarray):
+        self.T_bg = self.np2torch(np.unique(t[d == 1]))
         self.T_diff_int = self.T_bg[1:] - self.T_bg[:-1]
-        self.T_diff_prob = self.np2torch(t_diff)
+        self.T_diff_prob = torch.concat((self.T_diff_int[0, None], self.T_diff_int.clone()))
         self.zero_mask = self.T_diff_prob < 1e-8
         
     def _get_optimizer(self) -> torch.optim.Optimizer:
@@ -178,7 +174,7 @@ class SurvTraj(torch.nn.Module):
         xi_z = self.calc_prototype(mu, sigma, t, True) # (batch, points_n, z_dim)
         # dec_points = torch.concat((xi_z, t[..., None]), -1).flatten(end_dim=-2)
         # mu, _ = self.vae.get_mu_sigma(self.vae.decoder(dec_points))
-        surv_func, _ = self.beran(*self._prepare_bg_data(xi_z.shape[0] * xi_z.shape[1]), xi_z.flatten(end_dim=-2))
+        surv_func, _ = self.beran(xi_z.flatten(end_dim=-2))
         E_T = self.calc_exp_time(surv_func)
         # D = torch.ones(xi_z.shape[0] * xi_z.shape[1], device=self.device)
         # c_ind = c_ind_loss(t.ravel(), D, E_T, self.c_ind_temp)
@@ -211,7 +207,7 @@ class SurvTraj(torch.nn.Module):
         xi_z = self.calc_prototype(mu, sigma, t, True) # (batch, points_n, z_dim)
         # dec_points = torch.concat((xi_z, t[..., None]), -1).flatten(end_dim=-2)
         # mu, _ = self.vae.get_mu_sigma(self.vae.decoder(dec_points))
-        surv_func, _ = self.beran(*self._prepare_bg_data(xi_z.shape[0] * xi_z.shape[1]), xi_z.flatten(end_dim=-2))
+        surv_func, _ = self.beran(xi_z.flatten(end_dim=-2))
         E_T = self.calc_exp_time(surv_func).reshape(xi_z.shape[0], xi_z.shape[1])
         # D = torch.ones(xi_z.shape[0] * xi_z.shape[1], device=self.device)
         c_ind = self.c_ind_traj_loss(t, E_T, self.c_ind_temp)
@@ -227,8 +223,9 @@ class SurvTraj(torch.nn.Module):
         return c_ind
     
     def calc_likelihood(self, x: torch.Tensor, t: torch.Tensor):
-        self.beran.kernel.bandwidth.requires_grad = False
+        # self.beran.kernel.bandwidth.requires_grad = False
         # self.smoother.bandwidth.requires_grad = False
+        self.beran.nn.requires_grad = False
         mu, sigma = self.vae.get_mu_sigma(x)
                 
         batch_len, dim = mu.shape
@@ -238,8 +235,7 @@ class SurvTraj(torch.nn.Module):
         sigma_expanded = sigma[:, None, :].expand(-1, z_i_n, -1).reshape(z_i.shape) # (batch * z_i_n, dim)
         pi_z = self.calc_pdf(z_i, mu_expanded, sigma_expanded) # (batch * z_i_n)
         
-        mu_bg, delta_bg = self._prepare_bg_data(z_i.shape[0])
-        _, surv_steps = self.beran(mu_bg.detach(), delta_bg.detach(), z_i) # (batch * z_i_n, t_n)
+        _, surv_steps = self.beran(z_i) # (batch * z_i_n, t_n)
         pi_t_z = self.surv_steps_to_proba(surv_steps) # (batch * z_i_n, t_n)
         bg_times = self.T_bg
         pi_t_z = self.smoother(pi_t_z, bg_times, t, self.samples_num) # (batch, z_i_n, p_n) or (batch, z_i_n)
@@ -248,13 +244,13 @@ class SurvTraj(torch.nn.Module):
         weights = self.calc_xi_weights(pi_t_z, pi_z) # same as input, weighted within 1'st dim
         xi_z = torch.sum(weights[..., None] * z_i, dim=1) # (batch, z_dim) or (batch, p_n, z_dim)
         
-        mu_bg, delta_bg = self._prepare_bg_data(xi_z.shape[0])
-        _, proba = self.beran(mu_bg.detach(), delta_bg.detach(), xi_z)
+        _, proba = self.beran(xi_z)
         step_idx = torch.searchsorted(self.T_bg, t).clamp_max_(proba.shape[1] - 1)
         steps = torch.take_along_dim(proba, step_idx[:, None], dim=1)
         steps[steps < 1e-13] = 1
         logs = torch.log(steps)
-        self.beran.kernel.bandwidth.requires_grad = True
+        self.beran.nn.requires_grad = True
+        # self.beran.kernel.bandwidth.requires_grad = True
         # self.smoother.bandwidth.requires_grad = True
         # return torch.mean(logs)
         
@@ -320,7 +316,7 @@ class SurvTraj(torch.nn.Module):
                 d_t.squeeze_(0)
                 
                 optimizer.zero_grad()
-                self._set_background(x_b, t_b, d_b)
+                # self._set_background(x_b, t_b, d_b)
                 
                 target_ds = TensorDataset(x_t, t_t, d_t)
                 target_loader = DataLoader(target_ds, sub_batch_len, False)
@@ -405,7 +401,7 @@ class SurvTraj(torch.nn.Module):
                 summary_writer.add_scalars('train_metrics', epoch_metrics, e)
             if val_set is not None:
                 cur_patience += 1
-                self._set_background(X_full_tens, T_full_tens, D_full_tens)
+                # self._set_background(X_full_tens, T_full_tens, D_full_tens)
                 val_loss = self.score(*val_set)
                 if val_loss >= best_val_loss:
                     best_val_loss = val_loss
@@ -418,7 +414,7 @@ class SurvTraj(torch.nn.Module):
                     print('Early stopping!')
                     self.load_state_dict(weights)
                     break
-        self._set_background(X_full_tens, T_full_tens, D_full_tens)
+        # self._set_background(X_full_tens, T_full_tens, D_full_tens)
         time_elapsed = time.time() - start_time
         print('Training time:', round(time_elapsed, 1), 's.')
         if log_dir is not None:
@@ -436,12 +432,6 @@ class SurvTraj(torch.nn.Module):
             t = T.cpu().numpy()
         train_data = np.concatenate((mu.cpu().numpy(), t[:, None]), axis=-1)
         self.cens_model.fit(train_data, d.astype(np.int0))
-        
-    def _prepare_bg_data(self, batch_num: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        mu, _ = self.vae.get_mu_sigma(self.X_bg)
-        mu = mu[None, ...].expand(batch_num, -1, -1)
-        D_bg = self.D_bg[None, :].expand(batch_num, -1)
-        return mu, D_bg
 
     def calc_exp_time(self, surv_func: torch.Tensor) -> torch.Tensor:
         integral = self.T_bg[None, 0] + \
@@ -529,7 +519,7 @@ class SurvTraj(torch.nn.Module):
         sigma_expanded = sigma[:, None, :].expand(-1, z_i_n, -1).reshape(z_i.shape) # (batch * z_i_n, dim)
         pi_z = self.calc_pdf(z_i, mu_expanded, sigma_expanded) # (batch * z_i_n)
         
-        _, surv_steps = self.beran(*self._prepare_bg_data(z_i.shape[0]), z_i) # (batch * z_i_n, t_n)
+        _, surv_steps = self.beran(z_i) # (batch * z_i_n, t_n)
         pi_t_z = self.surv_steps_to_proba(surv_steps) # (batch * z_i_n, t_n)
         # assert not torch.any(torch.isnan(pi_t_z))
         bg_times = self.T_bg
@@ -558,7 +548,7 @@ class SurvTraj(torch.nn.Module):
     # from x to its reconstrucrion and estimated time
     def forward(self, x: torch.Tensor):
         mu, sigma = self.vae.get_mu_sigma(x)
-        surv_func, surv_steps = self.beran(*self._prepare_bg_data(mu.shape[0]), mu) # (batch, t_n)
+        surv_func, surv_steps = self.beran(mu) # (batch, t_n)
         T_gen = self.gen_evt_time(surv_steps, self.T_bg) # (x_n)
         E_T = self.calc_exp_time(surv_func)
         xi_z, z_i = self.calc_prototype(mu, sigma, T_gen, f_return_z_i=True)
@@ -589,7 +579,7 @@ class SurvTraj(torch.nn.Module):
                 X_b = x_b[0].to(self.device)
                 
                 mu, sigma = self.vae.get_mu_sigma(X_b)
-                _, surv_steps = self.beran(*self._prepare_bg_data(mu.shape[0]), mu) # (batch, t_n)
+                _, surv_steps = self.beran(mu) # (batch, t_n)
                 T_gen = self.gen_evt_time(surv_steps, self.T_bg) # (x_n)
                 xi_z = self.calc_prototype(mu, sigma, T_gen)
                 T_feat = ((T_gen - self.T_mean) / self.T_std)[:, None]
@@ -635,7 +625,7 @@ class SurvTraj(torch.nn.Module):
         with torch.no_grad():
             X = self.np2torch(x)
             mu, _ = self.vae.get_mu_sigma(X)
-            surv_func, _ = self.beran(*self._prepare_bg_data(mu.shape[0]), mu) # (batch, t_n)
+            surv_func, _ = self.beran(mu) # (batch, t_n)
             E_T = self.calc_exp_time(surv_func)
             return E_T.cpu().numpy()
         
