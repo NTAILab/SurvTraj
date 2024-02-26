@@ -11,7 +11,7 @@ from numba import njit, bool_
 from torch.utils.data import TensorDataset, DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm.auto import tqdm
-from .smoother import SoftminStepSmoother
+from .smoother import SoftminStepSmoother, DummySmoother
 import copy
 
 @njit
@@ -106,7 +106,7 @@ class SurvTraj(torch.nn.Module):
         self.batch_load = batch_load
         self.patience = patience
         
-        self.smoother = SoftminStepSmoother(self.device)
+        self.smoother = DummySmoother() # SoftminStepSmoother(self.device)
         if cens_clf_model is not None:
             assert hasattr(cens_clf_model, 'predict_proba')
             assert hasattr(cens_clf_model, 'fit')
@@ -222,42 +222,49 @@ class SurvTraj(torch.nn.Module):
         # mae = torch.mean(torch.abs(t.ravel() - E_T.ravel()))
         return c_ind
     
-    def calc_likelihood(self, x: torch.Tensor, t: torch.Tensor):
+    def calc_tr_llh(self, x: torch.Tensor, t_min: torch.Tensor, t_max: torch.Tensor,
+                             points_n: int):
         # self.beran.kernel.bandwidth.requires_grad = False
         # self.smoother.bandwidth.requires_grad = False
-        self.beran.nn.requires_grad = False
+        assert points_n > 1
+        t = (t_max - t_min) / (points_n - 1)
+        assert torch.all(t >= 0)
+        t = t[:, None].repeat(1, points_n)
+        t[:, 0] = t_min
+        t = torch.cumsum(t, dim=-1)
         mu, sigma = self.vae.get_mu_sigma(x)
-                
-        batch_len, dim = mu.shape
-        z_i_n = self.samples_num
-        z_i = self.vae.gen_samples(mu, sigma, z_i_n).reshape(-1, dim) # (batch * z_i_n, dim)
-        mu_expanded = mu[:, None, :].expand(-1, z_i_n, -1).reshape(z_i.shape) # (batch * z_i_n, dim)
-        sigma_expanded = sigma[:, None, :].expand(-1, z_i_n, -1).reshape(z_i.shape) # (batch * z_i_n, dim)
-        pi_z = self.calc_pdf(z_i, mu_expanded, sigma_expanded) # (batch * z_i_n)
+        xi_z = self.calc_prototype(mu, sigma, t, True)
         
-        _, surv_steps = self.beran(z_i) # (batch * z_i_n, t_n)
-        pi_t_z = self.surv_steps_to_proba(surv_steps) # (batch * z_i_n, t_n)
-        bg_times = self.T_bg
-        pi_t_z = self.smoother(pi_t_z, bg_times, t, self.samples_num) # (batch, z_i_n, p_n) or (batch, z_i_n)
-        pi_z = torch.reshape(pi_z, (batch_len, self.samples_num)) # (batch, z_i_n)
-        z_i = torch.reshape(z_i, (batch_len, self.samples_num, dim))
-        weights = self.calc_xi_weights(pi_t_z, pi_z) # same as input, weighted within 1'st dim
-        xi_z = torch.sum(weights[..., None] * z_i, dim=1) # (batch, z_dim) or (batch, p_n, z_dim)
-        
-        _, proba = self.beran(xi_z)
-        step_idx = torch.searchsorted(self.T_bg, t).clamp_max_(proba.shape[1] - 1)
-        steps = torch.take_along_dim(proba, step_idx[:, None], dim=1)
-        steps[steps < 1e-13] = 1
+        self.beran.nn.requires_grad = False
+        sf, proba = self.beran(xi_z)
+        step_idx = torch.searchsorted(self.T_bg[None, :].repeat(t.shape[0], 1), t).clamp_max_(proba.shape[1] - 1)
+        steps = torch.take_along_dim(proba, step_idx[..., None], dim=-1)
+        # steps[steps < 1e-13] = 1
         logs = torch.log(steps)
         self.beran.nn.requires_grad = True
         # self.beran.kernel.bandwidth.requires_grad = True
         # self.smoother.bandwidth.requires_grad = True
-        # return torch.mean(logs)
+        return torch.mean(logs)
         
-        km_step_idx = torch.searchsorted(self.km_times, t).clamp_max_(self.km_proba.shape[0] - 1)
-        km_proba = torch.take_along_dim(self.km_proba, km_step_idx, 0)
-        metric_weights = torch.nn.functional.softmin(km_proba, 0)
-        return torch.sum(metric_weights * logs[:, 0])
+        # km_step_idx = torch.searchsorted(self.km_times, t).clamp_max_(self.km_proba.shape[0] - 1)
+        # km_proba = torch.take_along_dim(self.km_proba, km_step_idx, 0)
+        # metric_weights = torch.nn.functional.softmin(km_proba, 0)
+        # return torch.sum(metric_weights * logs[:, 0])
+        
+        
+    def calc_surv_llh(self, surv_func, surv_proba, t_bg, t, delta):
+        uncens_mask = delta == 1
+        cens_mask = delta == 0
+        t_uncens = t[uncens_mask]
+        t_cens = t[cens_mask]
+        uncens_idx = torch.searchsorted(t_bg, t_uncens).clamp_max_(t_bg.shape[0] - 1)
+        cens_idx = torch.searchsorted(t_bg, t_cens).clamp_max_(t_bg.shape[0] - 1)
+        logs_uncens = torch.take_along_dim(surv_proba[uncens_mask, :], uncens_idx[:, None], dim=-1)
+        logs_uncens = torch.log(logs_uncens)
+        logs_cens = torch.take_along_dim(surv_func[cens_mask, :], cens_idx[:, None], dim=-1)
+        logs_cens = torch.log(logs_cens)
+        total_sum = torch.sum(logs_uncens) + torch.sum(logs_cens)
+        return 1 / t.shape[0] * total_sum
         
         
     def fit(self, x: np.ndarray, y: np.recarray, 
@@ -285,14 +292,15 @@ class SurvTraj(torch.nn.Module):
         self.uncens_part = np.sum(train_D) / train_D.shape[0]
         X_full_tens = self.np2torch(x)
         T_full_tens = self.np2torch(train_T)
-        D_full_tens = self.np2torch(train_D, torch.int)
+        # D_full_tens = self.np2torch(train_D, torch.int)
         traj_min_time = torch.min(T_full_tens)
         traj_max_time = torch.max(T_full_tens)
         
         for e in range(1, self.epochs + 1):
-            cum_loss, cum_x_loss, cum_reg_loss, cum_benk_loss = 0, 0, 0, 0
+            cum_loss, cum_x_loss, cum_reg_loss, cum_llh = 0, 0, 0, 0
             cum_traj_c_val, cum_traj_mae = 0, 0
-            cum_traj_c_loss, cum_llh_loss = 0, 0
+            cum_traj_llh = 0
+            cum_traj_c = 0
             i = 0
             data = dataset_generator(x, train_T, train_D, back_size, self.batch_num)
             X_back = self.np2torch(data[0])
@@ -320,27 +328,35 @@ class SurvTraj(torch.nn.Module):
                 
                 target_ds = TensorDataset(x_t, t_t, d_t)
                 target_loader = DataLoader(target_ds, sub_batch_len, False)
-                benk_loss, vae_loss, x_loss, regularizer = 0, 0, 0, 0
+                llh, vae_loss, x_loss, regularizer = 0, 0, 0, 0
                 traj_c_ind_val, traj_mae_val = 0, 0
-                traj_c_ind_loss = 0
-                likelihood = 0
+                traj_llh = 0
+                traj_c_loss = 0
                 
                 for x_t_b, t_t_b, d_t_b in target_loader:
                     x_t_b, t_t_b, d_t_b = x_t_b.to(self.device), t_t_b.to(self.device), d_t_b.to(self.device)
-                    x_est, E_T, T_gen, z = self(x_t_b)
+                    
+                    
+                    mu, sigma = self.vae.get_mu_sigma(x_t_b)
+                    surv_func, surv_proba = self.beran(mu) # (batch, t_n)
+                    T_gen = self.gen_evt_time(surv_proba, self.T_bg) # (x_n)
+                    E_T = self.calc_exp_time(surv_func)
+                    xi_z, z = self.calc_prototype(mu, sigma, T_gen, f_return_z_i=True)
+                    T_feat = ((T_gen - self.T_mean) / self.T_std)[:, None]
+                    x_est = self.vae.decoder(torch.concat((xi_z, T_feat), dim=-1))
 
-                    benk_loss += self.beran_loss(t_t_b, d_t_b, E_T, self.c_ind_temp)
+                    # benk_loss += self.beran_loss(t_t_b, d_t_b, E_T, self.c_ind_temp)
+                    llh += self.calc_surv_llh(surv_func, surv_proba, self.T_bg, t_t_b, d_t_b)
                     
                     uncens_mask = d_t_b == 1
                     x_uncens = x_t_b[uncens_mask]
-                    t_uncens = t_t_b[uncens_mask]
-                    t_min = traj_min_time.expand(x_t_b.shape[0])
-                    t_max = traj_max_time.expand(x_t_b.shape[0])
-                    traj_c_ind_loss += self.calc_beran_traj_loss(x_t_b, t_min, t_max, self.traj_pnl_p_n)
+                    # t_uncens = t_t_b[uncens_mask]
+                    t_min = traj_min_time.expand(x_uncens.shape[0])
+                    t_max = traj_max_time.expand(x_uncens.shape[0])
+                    traj_llh += self.calc_tr_llh(x_uncens, t_min, t_max, self.traj_pnl_p_n)
+                    # traj_c_loss += self.calc_beran_traj_loss(x_uncens, t_min, t_max, self.traj_pnl_p_n)
                 
-                    cur_vae_loss, cur_x_loss, cur_regularizer = self.vae_loss(x_t_b, z, x_est)
-                    
-                    likelihood += self.calc_likelihood(x_uncens, t_uncens)               
+                    cur_vae_loss, cur_x_loss, cur_regularizer = self.vae_loss(x_t_b, z, x_est)            
                     vae_loss += cur_vae_loss
                     x_loss += cur_x_loss
                     regularizer += cur_regularizer
@@ -358,18 +374,18 @@ class SurvTraj(torch.nn.Module):
                         traj_mae_val += tr_mae
                 
                 tl_len = len(target_loader)
-                benk_loss /= tl_len
+                llh /= tl_len
                 vae_loss /= tl_len
                 x_loss /= tl_len
                 regularizer /= tl_len
                 traj_c_ind_val /= tl_len
                 traj_mae_val /= tl_len
-                traj_c_ind_loss /= tl_len
+                traj_llh /= tl_len
                 
-                loss = -self.c_ind_w * benk_loss
-                loss += -self.traj_w * traj_c_ind_loss
-                loss += self.vae_w * vae_loss
-                loss += -self.llh_w * likelihood
+                loss = -llh
+                loss += vae_loss
+                loss += -traj_llh
+                # loss += -0.2 * traj_c_loss
                 # loss = self.c_ind_w * (-benk_loss - traj_c_ind_loss) + (1 - self.c_ind_w) * vae_loss
 
                 loss.backward()
@@ -379,20 +395,20 @@ class SurvTraj(torch.nn.Module):
                 cum_loss += loss.item()
                 cum_x_loss += x_loss
                 cum_reg_loss += regularizer
-                cum_benk_loss += benk_loss.item()
+                cum_llh += llh.item()
                 cum_traj_c_val += traj_c_ind_val
                 cum_traj_mae += traj_mae_val
-                cum_traj_c_loss += traj_c_ind_loss.item()
-                cum_llh_loss += likelihood.item()
+                cum_traj_llh += traj_llh.item()
+                cum_traj_c += traj_c_loss#.item()
                 
                 i += 1
                 epoch_metrics = {
                     'Loss': cum_loss / i,
                     'Recon': cum_x_loss / i,
                     'Regul': cum_reg_loss / i,
-                    'C ind': cum_benk_loss / i,
-                    'Traj C': cum_traj_c_loss / i,
-                    'Likelihood': cum_llh_loss / i,
+                    'Likelihood': cum_llh / i,
+                    'Traj llh': cum_traj_llh / i,
+                    'Traj C': cum_traj_c / i,
                     'Traj C val': cum_traj_c_val / i,
                     'Traj MAE': cum_traj_mae / i,
                 }
@@ -438,8 +454,8 @@ class SurvTraj(torch.nn.Module):
             torch.sum(surv_func[:, :-1] * self.T_diff_int[None, :], dim=-1)
         return integral # (batch)
     
-    def gen_evt_time(self, surv_steps: torch.Tensor, time: torch.Tensor) -> torch.Tensor:
-        logits = torch.logit(surv_steps, 1e-10)
+    def gen_evt_time(self, proba: torch.Tensor, time: torch.Tensor) -> torch.Tensor:
+        logits = torch.logit(proba, 1e-10)
         softmax = torch.nn.functional.gumbel_softmax(logits, self.gumbel_tau, dim=-1, hard=True)
         T_gen = torch.sum(time[None, :] * softmax, -1)
         return T_gen
@@ -519,8 +535,8 @@ class SurvTraj(torch.nn.Module):
         sigma_expanded = sigma[:, None, :].expand(-1, z_i_n, -1).reshape(z_i.shape) # (batch * z_i_n, dim)
         pi_z = self.calc_pdf(z_i, mu_expanded, sigma_expanded) # (batch * z_i_n)
         
-        _, surv_steps = self.beran(z_i) # (batch * z_i_n, t_n)
-        pi_t_z = self.surv_steps_to_proba(surv_steps) # (batch * z_i_n, t_n)
+        _, surv_proba = self.beran(z_i) # (batch * z_i_n, t_n)
+        pi_t_z = surv_proba#self.surv_steps_to_proba(surv_steps) # (batch * z_i_n, t_n)
         # assert not torch.any(torch.isnan(pi_t_z))
         bg_times = self.T_bg
         pi_t_z = self.smoother(pi_t_z, bg_times, t, self.samples_num) # (batch, z_i_n, p_n) or (batch, z_i_n)
@@ -548,8 +564,8 @@ class SurvTraj(torch.nn.Module):
     # from x to its reconstrucrion and estimated time
     def forward(self, x: torch.Tensor):
         mu, sigma = self.vae.get_mu_sigma(x)
-        surv_func, surv_steps = self.beran(mu) # (batch, t_n)
-        T_gen = self.gen_evt_time(surv_steps, self.T_bg) # (x_n)
+        surv_func, surv_proba = self.beran(mu) # (batch, t_n)
+        T_gen = self.gen_evt_time(surv_proba, self.T_bg) # (x_n)
         E_T = self.calc_exp_time(surv_func)
         xi_z, z_i = self.calc_prototype(mu, sigma, T_gen, f_return_z_i=True)
         T_feat = ((T_gen - self.T_mean) / self.T_std)[:, None]
@@ -579,8 +595,8 @@ class SurvTraj(torch.nn.Module):
                 X_b = x_b[0].to(self.device)
                 
                 mu, sigma = self.vae.get_mu_sigma(X_b)
-                _, surv_steps = self.beran(mu) # (batch, t_n)
-                T_gen = self.gen_evt_time(surv_steps, self.T_bg) # (x_n)
+                _, surv_proba = self.beran(mu) # (batch, t_n)
+                T_gen = self.gen_evt_time(surv_proba, self.T_bg) # (x_n)
                 xi_z = self.calc_prototype(mu, sigma, T_gen)
                 T_feat = ((T_gen - self.T_mean) / self.T_std)[:, None]
                 x_est = self.vae.decoder(torch.concat((xi_z, T_feat), dim=-1))
@@ -630,6 +646,7 @@ class SurvTraj(torch.nn.Module):
             return E_T.cpu().numpy()
         
     def generate_apriori_t(self, num: int) -> torch.Tensor:
+        raise NotImplementedError()
         steps = self.km_hist[None, :].expand(num, -1)
         T = self.gen_evt_time(steps, self.km_times)
         return T

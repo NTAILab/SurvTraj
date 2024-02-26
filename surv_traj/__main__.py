@@ -638,15 +638,15 @@ def aids_exp():
 if __name__=='__main__':
     vae_kw = {
         'latent_dim': 8,
-        'regular_coef': 40,
+        'regular_coef': 60,
         'sigma_z': 1
     }
     mixup_kw = {
         'vae_kw': vae_kw,
-        'samples_num': 48,
+        'samples_num': 64,
         'batch_num': 16,
-        'epochs': 100,
-        'lr_rate': 2e-3,
+        'epochs': 150,
+        'lr_rate': 3e-3,
         'c_ind_weight': 1.0,
         'vae_weight': 0.7,
         'traj_weight': 0.1,
@@ -654,12 +654,12 @@ if __name__=='__main__':
         'c_ind_temp': 1,
         'gumbel_tau': 1.0,
         'train_bg_part': 0.6,
-        'batch_load': None,
+        'batch_load': None, 
         'device': 'cuda:0',
     }
-    x_experiment_linear()
+    # x_experiment_linear()
     # x_experiment_spiral()
-    # x_experiment_moons()
+    x_experiment_moons()
     # x_experiment_curves()
     # x_experiment_overlap()
     # censored_exp()
